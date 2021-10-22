@@ -337,7 +337,48 @@ def generate_partial_runList(runBoundsList, allRuns):
     return outDict
 
 def get_data_for_runList_mp(proposal, runList, fields, roi,
-                            inputData={}, append=False, errors=False, nprocesses=8):
+                            inputData={}, append=False, errors=False,
+                            nprocesses=None):
+    '''
+    Generates a dictionary containing datasets for the selected runs.
+    For reference runs also removes baseline from spectra, and calculates
+    the standard deviation and mean error of the spectra.
+    
+    Parameters
+    ----------
+    proposal: int
+        proposal number
+
+    runList: dict
+        dictionary containing information on the runs
+
+    fields: list 
+        list of mnemonics to load into the memory
+
+    roi: list or 1d ndarray
+        region of interest for the Viking spectrometer image; [xMin, xMax,
+        yMin, yMax]
+
+    inputData: dict
+        dictionary with xarray Datasets, optional; the runs contained in
+        this dictionary are omitted
+
+    append: bool
+        If true, the data is appended to inputData, else a copy is created to
+        which the missing runs are added
+
+    errors: bool
+        If true, also calculates mean spectrum with baseline removed, standard
+        deviation of the spectra and standard error of the mean
+    nprocesses: int, optional
+        The number of processes to perform the loading of data. If None, equals
+        to min(16, number of runs).
+        
+    Outputs
+    -------
+    data: dictionary
+        dictionary with xarray Datasets for the selected runs
+    '''
     if append:
         data = inputData
     else:
@@ -345,8 +386,10 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
     runNBs = [r for r in runList if r not in data]
     if len(runNBs) == 0:
         return data
+    if nprocesses is None:
+        nprocesses = min(16, len(runNBs))
     args = [(proposal, runNB, fields, runList[runNB][0], roi) for runNB in runNBs]
-    print('loading runs', runNBs)
+    print(f'loading runs {runNBs} with {nprocesses} processes.')
     with Pool(nprocesses) as pool:
         result = pool.starmap(get_run, args)
     
@@ -654,7 +697,7 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
     valid_tid: xarray DataArray of boolean with dim='trainId'
         the flitered train Ids. Adds this variable to the original dataset.
     """
-    scanneX_mask = ds.trainId.astype(bool)
+    scannerX_mask = ds.trainId.astype(bool)
     if use_scannerX:
         if xStart is None:
             xStart = ds.scannerX[0]
@@ -744,7 +787,7 @@ def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
 
 def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
              plotAbsCoefRange=None, plotErrors=False, save=False,
-             saveTitle='', legend=''):
+             saveTitle='', legend='', sortby=None):
     ''' Plot reference spectra, sample spectra and effective absorption coefficient
         for a range of transmissions.
         Inputs:
@@ -775,7 +818,7 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
             
         saveTitle: string
             partial name for of the file to which the plot is saved
-            
+
         Outputs:
         ------
         
@@ -784,9 +827,14 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
     L3edge = 932.7
     L2edge = 952.3
     nPlots = 4
-    
-    fig, ax = plt.subplots(nPlots, 1, sharex=True, figsize=(6,15))
-    for r in mdata:
+    if sortby=='Tr':
+        keys = [float(k.replace('Tr', '')) for k in mdata.keys()]
+        idx = np.argsort(keys) 
+        ordered = np.array([k for k in mdata.keys()])[idx]
+    else:
+        ordered = [k for k in mdata.keys()]
+    fig, ax = plt.subplots(nPlots, 1, sharex=True, figsize=(8,15))
+    for r in ordered:
         ref = mdata[r]['ref'].spectrum_nobl_avg
         attrs_ref = mdata[r]['ref'].attrs
         avg_penergy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
@@ -843,7 +891,7 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
     for i in range(nPlots):
         ax[i].axvline(L3edge, ls='--', color='grey')
         ax[i].axvline(L2edge, ls='--', color='grey')
-        ax[i].legend(ncol=1, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
+        ax[i].legend(ncol=2, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
         ax[i].grid()
         
     ax[0].set_ylabel('reference')
@@ -859,8 +907,9 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
     if plotXRange is not None:
         plt.xlim(plotXRange[0], plotXRange[1])
     ax[0].set_title(title)
-    # fig.tight_layout()
+    fig.tight_layout()
     
     if save:
         fig.patch.set_alpha(1)
         plt.savefig('XAS_'+saveTitle+'.png', dpi=300, bbox_inches='tight')
+    return fig, ax
