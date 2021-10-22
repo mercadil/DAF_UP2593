@@ -570,16 +570,19 @@ def filter_trainIds_with_index(mdata, indexList):
         
     return
 
-def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1,
+def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scannerX=True,
                             min_threshold=None, max_threshold=None, spectralRange=[920, 960],
                             tid_indices=None, plot=True):
     """
     Filters the rastered data by scanner X position, threshold on spectrum sum,
     and train Id indices.
-    First filtering where scanner X is lower than xStart - tolerance and
-    higher than xStop + tolerance.
-    Second filtering where spectral sum accros spectralRange is within
+    First filtering is where scanner X is lower than xStart - tolerance and
+    higher than xStop + tolerance. It also scans the derivative of the stage and
+    filters out trainIds where the scannerX is stopped for more than 5 consecutive
+    trains.
+    Second filtering is where spectral sum accros spectralRange is within
     [min_threshold, maxt_threshold].
+    Third filtering is to allow specific ranges of indices.
     
     Parameters
     ----------
@@ -603,47 +606,51 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1,
     
     Output
     ------
-    valid_tid: xarray DataArray
-        the flitered train Ids.
+    valid_tid: xarray DataArray of boolean with dim='trainId'
+        the flitered train Ids. Adds this variable to the original dataset.
     """
-    if xStart is None:
-        xStart = ds.scannerX[0]
-    if xStop is None:
-        xStop = ds.scannerX[-1]
-    scannerX_tid = ds.trainId.where(
-        ds.scannerX < xStart - tolerance).where(
-        ds.scannerX > xStop + tolerance).dropna(dim='trainId').astype(int)
+    scanneX_mask = ds.trainId.astype(bool)
+    if use_scannerX:
+        if xStart is None:
+            xStart = ds.scannerX[0]
+        if xStop is None:
+            xStop = ds.scannerX[-1]
+        scannerX_mask = (ds.scannerX < xStart - tolerance) & (ds.scannerX > xStop + tolerance)
+        scannerX_diff = ds.scannerX.diff(dim='trainId')
+        mask = np.ones(ds.scannerX.shape, dtype=bool)
+        n = 5
+        for i, v in enumerate(scannerX_diff[:-n].values):
+            if v==0 and scannerX_diff[i+n]==0:
+                mask[i:i+n] = False
+        scannerX_mask = scannerX_mask & mask
+
     specsum = ds.spectrum.sel(x=slice(spectralRange[0],
                                       spectralRange[1])).sum(dim='x')
     if min_threshold is None:
         min_threshold = 0.75 * specsum.where(
             specsum >= specsum.mean()).median()
-    threshold_tid = specsum.trainId.where(specsum > min_threshold,
-                                          drop=True).astype(int)
+    threshold_mask = specsum > min_threshold
     if max_threshold is not None:
-        threshold_tid = specsum.trainId.sel(
-            trainId=threshold_tid).where(specsum < max_threshold,
-                                         drop=True).astype(int)
-    indices_tid = ds.trainId
+        threshold_mask = threshold_mask & (specsum < max_threshold)
+    
+    indices_mask = ds.trainId.astype(bool)
     if tid_indices is not None:
+        indices_mask = ~indices_mask
         for iMin, iMax in tid_indices:
-            indices_tid = ds.trainId.sel(trainId=slice(ds.trainId[iMin],
-                                                       ds.trainId[iMax]))
-    valid_tid = np.intersect1d(np.intersect1d(scannerX_tid, threshold_tid),
-                               indices_tid)
-    valid_tid = xr.DataArray(valid_tid, dims=['trainId'],
-                             coords={'trainId': ds.trainId.sel(trainId=valid_tid)})
-    ds['valid_tid'] = valid_tid
-    ds['valid_tid'] = ds.valid_tid.fillna(0).astype(bool)
+            indices_mask[iMin: iMax] = True
+    valid_mask = scannerX_mask & threshold_mask & indices_mask
+    #valid_tid = xr.DataArray(valid_mask, dims=['trainId'],
+    #                         coords={'trainId': ds.trainId})
+    ds['valid_tid'] = valid_mask
     if plot:
         # transform train Id values into indices
         ind = np.argwhere(ds.trainId.isin(ds.trainId).values)
-        scanX_ind = np.argwhere(ds.trainId.isin(scannerX_tid).values)
-        valid_ind = np.argwhere(ds.valid_tid.values)
+        scanX_ind = np.argwhere(scannerX_mask.values)
+        valid_ind = np.argwhere(valid_mask.values)
         plt.figure(figsize=(8,4))
         plt.plot(ind, ds.scannerX, 'o-', ms=3, label='all scannerX')
         plt.plot(scanX_ind,
-                 ds.scannerX.sel(trainId=scannerX_tid),
+                 ds.scannerX.where(scannerX_mask, drop=True),
                  '*-', label='filtered scannerX')
         plt.legend(loc='lower left')
         plt.ylabel('scannerX position [mm]')
@@ -651,7 +658,7 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1,
 
         plt.twinx()
         plt.plot(ind, specsum, color='C4', alpha=0.5, label='all')
-        plt.plot(valid_ind, specsum.sel(trainId=valid_tid),
+        plt.plot(valid_ind, specsum.where(valid_mask, drop=True),
                  color='k', lw=2, alpha=0.5, label='filtered')
         plt.axhline(min_threshold, ls='--', color='grey')
         plt.grid()
@@ -661,7 +668,7 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1,
         plt.legend(loc='lower right')
         plt.tight_layout()
         
-    return valid_tid
+    return valid_mask
 
 
 def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
