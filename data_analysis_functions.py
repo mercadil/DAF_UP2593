@@ -570,6 +570,81 @@ def filter_trainIds_with_index(mdata, indexList):
         
     return
 
+def filter_by_scannerX_and_threshold(ds, xStart=None, xStop=None, tolerance=0.1,
+                                     spectralRange=[920, 960], min_threshold=None,
+                                     max_threshold=None, plot=True):
+    """
+    Filters the rastered data by scanner X position and threshold on spectrum sum.
+    First filtering where scanner X is lower than xStart - tolerance and
+    higher than xStop + tolerance.
+    Second filtering where spectral sum accros spectralRange is within
+    [min_threshold, maxt_threshold].
+    
+    Parameters
+    ----------
+    ds: xarray Dataset
+        The dataset containing rastered sample spectra
+    xStart: float
+        value in mm of start position of scannerX. If None, equals scannerX[0]
+    xStop: float
+        value in mm of stop position of scannerX. If None, equals scannerX[-1]
+    tolerance: float
+        trainIds where xStart - tolerance < scannerX < xStop + tolerance
+    spectralRange: list of float
+        the spectral range for which to compute the sum for threshold filtering
+    min_threshold: float, optional
+        the minimum spectral sum value. If None, equals 0.75 * median.
+    max_threshold: float, optional
+        the maximum spectral sum value. If None, no upper limit for filtering.
+    plot: bool
+        plot the results of the filtering operation if True.
+    
+    Output
+    ------
+    valid_tid: xarray DataArray
+        the flitered train Ids.
+    """
+    if xStart is None:
+        xStart = ds.scannerX[0]
+    if xStop is None:
+        xStop = ds.scannerX[-1]
+    scannerX_tid = ds.trainId.where(
+        ds.scannerX < xStart - tolerance).where(
+        ds.scannerX > xStop + tolerance).dropna(dim='trainId')
+    specsum = ds.spectrum.sel(x=slice(spectralRange[0],
+                                      spectralRange[1])).sum(dim='x')
+    if min_threshold is None:
+        min_threshold = 0.75 * specsum.where(specsum >= specsum.mean()).median()
+    valid_tid = specsum.trainId.sel(
+        trainId=scannerX_tid).where(specsum > min_threshold, drop=True).astype(int)
+    if max_threshold is not None:
+        valid_tid = specsum.trainId.sel(
+            trainId=valid_tid).where(specsum < max_threshold, drop=True).astype(int)
+    if plot:
+        plt.figure(figsize=(8,4))
+        plt.plot(ds.trainId, ds.scannerX, 'o-', ms=3,
+                 label='all scannerX')
+        plt.plot(ds.trainId.sel(trainId=scannerX_tid),
+                 ds.scannerX.sel(trainId=scannerX_tid),
+                 '*-', label='filtered scannerX')
+        plt.legend(loc='lower left')
+
+        plt.twinx()
+        plt.plot(ds.trainId, specsum, color='C4',
+                 alpha=0.5, label='all')
+        plt.plot(ds.trainId.sel(trainId=valid_tid),
+                 specsum.sel(trainId=valid_tid),
+                 color='k', lw=2, alpha=0.5, label='filtered')
+        plt.axhline(min_threshold, ls='--', color='grey')
+        plt.grid()
+        if max_threshold is not None:
+            plt.axhline(max_threshold, ls='--', color='grey')
+        plt.ylabel(f'sum of spectrum over {spectralRange}')
+        plt.legend(loc='lower right')
+        plt.tight_layout()
+    return valid_tid
+
+
 def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
     ''' Removes baseline from spectra for concatenated sample runs,
         and calculates the standard deviation and mean error of the
