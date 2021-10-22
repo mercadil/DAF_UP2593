@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import BaselineRemoval as br
 import json
+from multiprocessing import Pool
 
 def load_runs_from_file(fname):
     ''' Loads run data from a text file to a dictionary.
@@ -181,8 +182,11 @@ def removeBaseline(spectra, degree=5, repitition=100, gradient=0.001):
                                     coords=spectra.coords)
     return spectra_corr
 
-def get_run(proposal, runNB, fields, darkNB=None, use_dark=True, 
-            tid_shift=-1, roi=[0,2048, 0,512], errors=False,
+def load_run_mp(params):
+    pass
+    
+def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512], 
+            tid_shift=-1, use_dark=True, errors=False,
             signalRange=[920, 960]):
     ''' Creates dataset for a run, subtracts dark background from the Viking spectrometer image and calculates the spectrum.
         Inputs:
@@ -331,6 +335,47 @@ def generate_partial_runList(runBoundsList, allRuns):
             outDict[key] = value
             
     return outDict
+
+def get_data_for_runList_mp(proposal, runList, fields, roi,
+                            inputData={}, append=False, errors=False, nprocesses=8):
+    if append:
+        data = inputData
+    else:
+        data = inputData.copy()
+    runNBs = [r for r in runList if r not in data]
+    if len(runNBs) == 0:
+        return data
+    args = [(proposal, runNB, fields, runList[runNB][0], roi) for runNB in runNBs]
+    print('loading runs', runNBs)
+    with Pool(nprocesses) as pool:
+        result = pool.starmap(get_run, args)
+    
+    for i, runNB in enumerate(runNBs):
+        params = runList[runNB]
+        ds = result[i][1]
+        darkNB = params[0]
+        if params[2] == 'ref':
+            #ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x, ds.spectrum.mean(dim='trainId'))
+            ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
+            ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
+            ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
+        ds.attrs['Tr'] = params[1]
+        ds.attrs['sample'] = params[2]
+        ds.attrs['filterTr'] = filterTransmission(params[3])
+        if len(params) > 4:
+            ds.attrs['pumpEnergy'] = params[4]
+        if len(params) > 5:
+            ds.attrs['sampleThickness'] = params[5]
+        if len(params) > 6:
+            ds.attrs['delay'] = params[6]
+        ds.attrs['scalingFactor'] = ds.attrs['countsToPhotoEl'] / ds.attrs['filterTr']
+        data[runNB] = ds
+    
+    if append:
+        return
+    else:
+        return data
+
 
 def get_data_for_runList(proposal, runList, fields, roi, inputData={}, append=False, errors=False):
     ''' Generates a dictionary containing datasets for the selected runs. For reference runs also removes baseline from spectra, and calculates the standard deviation and mean error of the spectra.
