@@ -570,11 +570,12 @@ def filter_trainIds_with_index(mdata, indexList):
         
     return
 
-def filter_by_scannerX_and_threshold(ds, xStart=None, xStop=None, tolerance=0.1,
-                                     spectralRange=[920, 960], min_threshold=None,
-                                     max_threshold=None, plot=True):
+def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1,
+                            min_threshold=None, max_threshold=None, spectralRange=[920, 960],
+                            tid_indices=None, plot=True):
     """
-    Filters the rastered data by scanner X position and threshold on spectrum sum.
+    Filters the rastered data by scanner X position, threshold on spectrum sum,
+    and train Id indices.
     First filtering where scanner X is lower than xStart - tolerance and
     higher than xStop + tolerance.
     Second filtering where spectral sum accros spectralRange is within
@@ -596,6 +597,7 @@ def filter_by_scannerX_and_threshold(ds, xStart=None, xStop=None, tolerance=0.1,
         the minimum spectral sum value. If None, equals 0.75 * median.
     max_threshold: float, optional
         the maximum spectral sum value. If None, no upper limit for filtering.
+    tid_indices: list of list of int
     plot: bool
         plot the results of the filtering operation if True.
     
@@ -610,30 +612,46 @@ def filter_by_scannerX_and_threshold(ds, xStart=None, xStop=None, tolerance=0.1,
         xStop = ds.scannerX[-1]
     scannerX_tid = ds.trainId.where(
         ds.scannerX < xStart - tolerance).where(
-        ds.scannerX > xStop + tolerance).dropna(dim='trainId')
+        ds.scannerX > xStop + tolerance).dropna(dim='trainId').astype(int)
     specsum = ds.spectrum.sel(x=slice(spectralRange[0],
                                       spectralRange[1])).sum(dim='x')
     if min_threshold is None:
-        min_threshold = 0.75 * specsum.where(specsum >= specsum.mean()).median()
-    valid_tid = specsum.trainId.sel(
-        trainId=scannerX_tid).where(specsum > min_threshold, drop=True).astype(int)
+        min_threshold = 0.75 * specsum.where(
+            specsum >= specsum.mean()).median()
+    threshold_tid = specsum.trainId.where(specsum > min_threshold,
+                                          drop=True).astype(int)
     if max_threshold is not None:
-        valid_tid = specsum.trainId.sel(
-            trainId=valid_tid).where(specsum < max_threshold, drop=True).astype(int)
+        threshold_tid = specsum.trainId.sel(
+            trainId=threshold_tid).where(specsum < max_threshold,
+                                         drop=True).astype(int)
+    indices_tid = ds.trainId
+    if tid_indices is not None:
+        for iMin, iMax in tid_indices:
+            indices_tid = ds.trainId.sel(trainId=slice(ds.trainId[iMin],
+                                                       ds.trainId[iMax]))
+    valid_tid = np.intersect1d(np.intersect1d(scannerX_tid, threshold_tid),
+                               indices_tid)
+    valid_tid = xr.DataArray(valid_tid, dims=['trainId'],
+                             coords={'trainId': ds.trainId.sel(trainId=valid_tid)})
+    ds['valid_tid'] = valid_tid
+    ds['valid_tid'] = ds.valid_tid.fillna(0).astype(bool)
     if plot:
+        # transform train Id values into indices
+        ind = np.argwhere(ds.trainId.isin(ds.trainId).values)
+        scanX_ind = np.argwhere(ds.trainId.isin(scannerX_tid).values)
+        valid_ind = np.argwhere(ds.valid_tid.values)
         plt.figure(figsize=(8,4))
-        plt.plot(ds.trainId, ds.scannerX, 'o-', ms=3,
-                 label='all scannerX')
-        plt.plot(ds.trainId.sel(trainId=scannerX_tid),
+        plt.plot(ind, ds.scannerX, 'o-', ms=3, label='all scannerX')
+        plt.plot(scanX_ind,
                  ds.scannerX.sel(trainId=scannerX_tid),
                  '*-', label='filtered scannerX')
         plt.legend(loc='lower left')
+        plt.ylabel('scannerX position [mm]')
+        plt.xlabel('Train Id index')
 
         plt.twinx()
-        plt.plot(ds.trainId, specsum, color='C4',
-                 alpha=0.5, label='all')
-        plt.plot(ds.trainId.sel(trainId=valid_tid),
-                 specsum.sel(trainId=valid_tid),
+        plt.plot(ind, specsum, color='C4', alpha=0.5, label='all')
+        plt.plot(valid_ind, specsum.sel(trainId=valid_tid),
                  color='k', lw=2, alpha=0.5, label='filtered')
         plt.axhline(min_threshold, ls='--', color='grey')
         plt.grid()
@@ -642,6 +660,7 @@ def filter_by_scannerX_and_threshold(ds, xStart=None, xStop=None, tolerance=0.1,
         plt.ylabel(f'sum of spectrum over {spectralRange}')
         plt.legend(loc='lower right')
         plt.tight_layout()
+        
     return valid_tid
 
 
