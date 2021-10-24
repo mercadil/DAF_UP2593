@@ -182,9 +182,7 @@ def removeBaseline(spectra, degree=5, repitition=100, gradient=0.001):
                                     coords=spectra.coords)
     return spectra_corr
 
-def load_run_mp(params):
-    pass
-    
+
 def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512], 
             tid_shift=-1, use_dark=True, errors=False,
             signalRange=[920, 960]):
@@ -239,8 +237,8 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
     ds = ds.merge(newton.newton, join='inner')
     if darkNB is not None and use_dark is True:
         dark_run, dark_ds = tb.load(proposal, darkNB, 'newton', rois=rois)
-        dark = dark_ds.newton.mean(dim='trainId')
-        newton_nobg = ds['newton'] - dark
+        ds['dark'] = dark_ds.newton.mean(dim='trainId')
+        newton_nobg = ds['newton'] - ds['dark']
         ds['spectrum'] = newton_nobg.sum(dim='y')
     else:
         ds['spectrum'] = ds['newton'].sum(dim='y')
@@ -389,7 +387,7 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
     if nprocesses is None:
         nprocesses = min(16, len(runNBs))
     args = [(proposal, runNB, fields, runList[runNB][0], roi) for runNB in runNBs]
-    print(f'loading runs {runNBs} with {nprocesses} processes.')
+    print(f'loading {len(runNBs)} runs {runNBs} with {nprocesses} processes.')
     with Pool(nprocesses) as pool:
         result = pool.starmap(get_run, args)
     
@@ -714,8 +712,10 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
 
     specsum = ds.spectrum.sel(x=slice(spectralRange[0],
                                       spectralRange[1])).sum(dim='x')
+    specsum = specsum / ds.XTD10_SA3.mean(dim='sa3_pId') * ds.XTD10_SA3.mean()
+    
     if min_threshold is None:
-        min_threshold = 0.75 * specsum.where(
+        min_threshold = 0.65 * specsum.where(
             specsum >= specsum.mean()).median()
     threshold_mask = specsum > min_threshold
     if max_threshold is not None:
@@ -727,8 +727,6 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
         for iMin, iMax in tid_indices:
             indices_mask[iMin: iMax] = True
     valid_mask = scannerX_mask & threshold_mask & indices_mask
-    #valid_tid = xr.DataArray(valid_mask, dims=['trainId'],
-    #                         coords={'trainId': ds.trainId})
     ds['valid_tid'] = valid_mask
     if plot:
         # transform train Id values into indices
