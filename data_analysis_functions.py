@@ -45,7 +45,10 @@ def get_camera_gain(run):
         return 4
 
 def photoelectronsPerCount_HS(gain):
-    ''' Conversion factor from camera gain to photoelectrons per count for High Sensitivity mode.
+    ''' Conversion factor from camera gain to photoelectrons
+        per count for High Sensitivity mode. The values can be found
+        in the camera datasheet but they have been slightly corrected
+        after analysis of runs 1204, 1207 and 1208.
         Inputs:
         ------
         gain: int
@@ -53,18 +56,19 @@ def photoelectronsPerCount_HS(gain):
             
         Outputs:
         ------
-        int:
+        float:
             photoelectrons per count
     '''
     if gain==1:
         return 4
     if gain==2:
-        return 2
+        return 2.05
     if gain==4:
-        return 0.9
+        return 0.97
     
 def photoelectronsPerCount_HC(gain):
-    ''' Conversion factor from camera gain to photoelectrons per count for High Capacity mode.
+    ''' Conversion factor from camera gain to photoelectrons per count
+        for High Capacity mode.
         Inputs:
         ------
         gain: int
@@ -96,7 +100,8 @@ def filterTransmission(filterStr):
         Inputs:
         ------
         filterStr: string
-            description of the filter with element name and thickness in microns; accepted values are 'Al3.5',  'Al5' or 'Al10'
+            description of the filter with element name and thickness in microns;
+            accepted values are 'Al3.5', 'Al5', 'Al10', 'Al15'
             
         Outputs:
         ------
@@ -468,7 +473,8 @@ def get_data_for_runList(proposal, runList, fields, roi, inputData={}, append=Fa
             #ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x, ds.spectrum.mean(dim='trainId'))
             ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
             ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
-            ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
+            if 'transmission' in ds:
+                ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
         ds.attrs['sample'] = params[2]
         ds.attrs['filterTr'] = filterTransmission(params[3])
