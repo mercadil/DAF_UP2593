@@ -735,7 +735,7 @@ allRuns = {
     828: [823, 0.00001, "Cu0.1", "NoFilter", 10000, 0.1],
     
     
-    #Cu2B, single color 950 eV
+    # Cu2B, single color 950 eV
     840: [839, 0.5, "ref", "Al15", 10000, 2],
     842: [839, 0.5, "Cu2", "Al15", 10000, 2],
     845: [839, 0.5, "Cu2", "Al15", 10000, 2],
@@ -743,8 +743,18 @@ allRuns = {
     847: [846, 0.2, "ref", "Al13.5", 10000, 2],
     848: [846, 0.2, "Cu2", "Al13.5", 10000, 2],    
     
+    # Proposal 2937!!!
+    # Energy calibration, week 39
+    894: [896, 0.05, "ref", "NoFilter"],    
+    895: [896, 0.05, "ref", "NoFilter"],    
+    897: [896, 0.05, "ref", "NoFilter"],    
+    898: [896, 0.05, "ref", "NoFilter"],    
+    899: [896, 0.05, "ref", "NoFilter"],    
+    900: [896, 0.05, "ref", "NoFilter"],    
+    901: [896, 0.05, "ref", "NoFilter"],    
+    902: [896, 0.05, "ref", "NoFilter"],    
     
-    #Cu0.1A, two_colors_delay, proposal 2937!!! 929 eV probe, 950 eV pump
+    # Cu0.1A, two_colors_delay, proposal 2937!!! 929 eV probe, 950 eV pump
     1299: [1301, 0.01, "ref", "NoFilter", 900, 0.1, 750],
     1303: [1301, 0.01, "Cu0.1", "NoFilter", 900, 0.1, 750],
     1304: [1301, 0.01, "Cu0.1", "NoFilter", 900, 0.1, 750],

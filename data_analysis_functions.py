@@ -263,13 +263,17 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
 def calibrate_viking(x, runNB):
     """
     Calibration of Viking spectrometer using 2nd order polynomial,
-    based on analysis of runs 118-124 (proposal 2593) and run 1716
-    (proposal 2937).
+    based on analysis of:
+    - WK 41: runs 118-124 (proposal 2593), valid for runs 1 - 851
+    - WK 41: run 1716 (proposal 2937), valid for runs 1299 - 1718
+    - WK39: runs 894 - 902, valid for runs ***
     """
     if runNB <= 851: # Proposal 2593
         coeffs = [1.20078832e-05, 8.06816040e-02, 8.63353911e+02]
     elif runNB >= 1289: # Proposal 2937
         coeffs = [1.21597814e-05, 8.03133850e-02, 8.63770237e+02]
+    elif runNB >=874 and runNB <= 1288: # Proposal 2937
+        coeffs = [1.17677273e-05, 7.90306688e-02, 8.52688452e+02]
     return np.poly1d(coeffs)(x)
 
 
@@ -399,7 +403,8 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
             #ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x, ds.spectrum.mean(dim='trainId'))
             ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
             ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
-            ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
+            if 'transmission' in ds:
+                ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
         ds.attrs['sample'] = params[2]
         ds.attrs['filterTr'] = filterTransmission(params[3])
@@ -697,25 +702,26 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
     """
     scannerX_mask = ds.trainId.astype(bool)
     if use_scannerX:
-        if xStart is None:
-            xStart = ds.scannerX[0]
-        if xStop is None:
-            xStop = ds.scannerX[-1]
-        scannerX_mask = (ds.scannerX < xStart - tolerance) & (ds.scannerX > xStop + tolerance)
+        #if xStart is None:
+        #    xStart = ds.scannerX[0]
+        #if xStop is None:
+        #    xStop = ds.scannerX[-1]
+        #scannerX_mask = (ds.scannerX < xStart - tolerance) & (ds.scannerX > xStop + tolerance)
         scannerX_diff = ds.scannerX.diff(dim='trainId')
         mask = np.ones(ds.scannerX.shape, dtype=bool)
         n = 5
         for i, v in enumerate(scannerX_diff[:-n].values):
             if v==0 and scannerX_diff[i+n]==0:
                 mask[i:i+n] = False
-        scannerX_mask = scannerX_mask & mask
-
+        #scannerX_mask = scannerX_mask & mask
+        scannerX_mask = xr.DataArray(mask, dims=['trainId'], 
+                                     coords={'trainId': ds.scannerX.trainId})
     specsum = ds.spectrum.sel(x=slice(spectralRange[0],
                                       spectralRange[1])).sum(dim='x')
     specsum = specsum / ds.XTD10_SA3.mean(dim='sa3_pId') * ds.XTD10_SA3.mean()
     
     if min_threshold is None:
-        min_threshold = 0.65 * specsum.where(
+        min_threshold = 0.75 * specsum.where(
             specsum >= specsum.mean()).median()
     threshold_mask = specsum > min_threshold
     if max_threshold is not None:
@@ -822,6 +828,7 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         
     '''
     beamlineTransmission = 0.32
+    Lalpha = 929.7
     L3edge = 932.7
     L2edge = 952.3
     nPlots = 4
@@ -851,16 +858,16 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         absorptionCoef = np.log(absorption)/thickness
         
         ax[0].plot(mdata[r]['ref'].x, ref * ref_scaling, 
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         ax[1].plot(mdata[r]['sample'].x, sample * sample_scaling,
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         ax[2].plot(mdata[r]['sample'].x, absorption,
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         ax[3].plot(mdata[r]['sample'].x, absorptionCoef,
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         
         if plotErrors:
@@ -889,7 +896,8 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
     for i in range(nPlots):
         ax[i].axvline(L3edge, ls='--', color='grey')
         ax[i].axvline(L2edge, ls='--', color='grey')
-        ax[i].legend(ncol=2, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
+        ax[i].axvline(Lalpha, ls='--', color='darkgrey')
+        ax[i].legend(ncol=4, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
         ax[i].grid()
         
     ax[0].set_ylabel('reference')
