@@ -108,12 +108,12 @@ def filterTransmission(filterStr):
         float
             transmission
     '''
-    if filterStr == 'Al3.5':
-        return 0.25
+    if filterStr == 'Al3.5': # measured, run 757, 764
+        return 0.281
     if filterStr == 'Al5':
         return 0.14
-    if filterStr == 'Al10':
-        return 0.02
+    if filterStr == 'Al10': # measured, runs 167, 168
+        return 0.025
     if filterStr == 'Al15':
         return 2.8e-3
     if filterStr == 'Al13.5':
@@ -191,7 +191,8 @@ def removeBaseline(spectra, degree=5, repitition=100, gradient=0.001):
 def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512], 
             tid_shift=-1, use_dark=True, errors=False,
             signalRange=[920, 960]):
-    ''' Creates dataset for a run, subtracts dark background from the Viking spectrometer image and calculates the spectrum.
+    ''' Creates dataset for a run, subtracts dark background from the Viking
+        spectrometer image and calculates the spectrum.
         Inputs:
         ------
         proposal: int
@@ -207,7 +208,7 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
             dark run number
             
         use_dark: bool
-            if True it subtracts the dark background from the Viking spectrometer image
+            if True, subtracts the dark background from the Viking spectrometer image
             
         tid_shift: int
             overall shift for the train IDs
@@ -668,8 +669,9 @@ def filter_trainIds_with_index(mdata, indexList):
     return
 
 def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scannerX=True,
-                            min_threshold=None, max_threshold=None, spectralRange=[920, 960],
-                            tid_indices=None, plot=True):
+                            frac=0.75, min_threshold=None, max_threshold=None,
+                            spectralRange=[920, 960], tid_indices=None, xgm_norm=True,
+                            plot=True):
     """
     Filters the rastered data by scanner X position, threshold on spectrum sum,
     and train Id indices.
@@ -693,11 +695,15 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
         trainIds where xStart - tolerance < scannerX < xStop + tolerance
     spectralRange: list of float
         the spectral range for which to compute the sum for threshold filtering
+    frac: float, optional
+        Only used if min_threshold is None. Sets min_threshold to frac * median.
     min_threshold: float, optional
-        the minimum spectral sum value. If None, equals 0.75 * median.
+        the minimum spectral sum value. If None, equals frac * median.
     max_threshold: float, optional
         the maximum spectral sum value. If None, no upper limit for filtering.
     tid_indices: list of list of int
+    xgm_norm: bool
+        If True, normalizes the spectral sum by the XTD10 XGM
     plot: bool
         plot the results of the filtering operation if True.
     
@@ -724,10 +730,11 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
                                      coords={'trainId': ds.scannerX.trainId})
     specsum = ds.spectrum.sel(x=slice(spectralRange[0],
                                       spectralRange[1])).sum(dim='x')
-    specsum = specsum / ds.XTD10_SA3.mean(dim='sa3_pId') * ds.XTD10_SA3.mean()
+    if xgm_norm:
+        specsum = specsum / ds.XTD10_SA3.mean(dim='sa3_pId') * ds.XTD10_SA3.mean()
     
     if min_threshold is None:
-        min_threshold = 0.75 * specsum.where(
+        min_threshold = frac * specsum.where(
             specsum >= specsum.mean()).median()
     threshold_mask = specsum > min_threshold
     if max_threshold is not None:
@@ -903,7 +910,7 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         ax[i].axvline(L3edge, ls='--', color='grey')
         ax[i].axvline(L2edge, ls='--', color='grey')
         ax[i].axvline(Lalpha, ls='--', color='darkgrey')
-        ax[i].legend(ncol=4, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
+        ax[i].legend(ncol=3, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
         ax[i].grid()
         
     ax[0].set_ylabel('reference')
