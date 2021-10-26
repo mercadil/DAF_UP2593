@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import BaselineRemoval as br
 import json
 from multiprocessing import Pool
+import pkg_resources 
 
 def load_runs_from_file(fname):
     ''' Loads run data from a text file to a dictionary.
@@ -95,31 +96,53 @@ def get_photoelectronsPerCount(run, gain):
         return photoelectronsPerCount_HC(gain)
     
 
-def filterTransmission(filterStr):
-    ''' Returns transmission of Al filters of specified thickness.
+def filterTransmission(filterStr, energy=None):
+    ''' Returns transmission of Al filters of specified thickness
+        for optional photon energy range.
         Inputs:
         ------
         filterStr: string
             description of the filter with element name and thickness in microns;
             accepted values are 'Al3.5', 'Al5', 'Al10', 'Al15'
-            
-        Outputs:
-        ------
-        float
-            transmission
+        energy: xarray or 1d ndarray
+            energy axis for energy-dependent transmission
+        
+        Outputs
+        -------
+        transmission: float or xarray or 1d ndarray
+            If energy is provided, 1d array with same length is returned.
     '''
-    if filterStr == 'Al3.5': # measured, run 757, 764
-        return 0.281
-    if filterStr == 'Al5':
-        return 0.14
-    if filterStr == 'Al10': # measured, runs 167, 168
-        return 0.025
-    if filterStr == 'Al15':
-        return 2.8e-3
-    if filterStr == 'Al13.5':
-        return 5e-3
-    return 1
-
+    if energy is None:
+        dict_Tr = {'Al3.5': 0.281, # measured, run 757, 764
+                   'Al5': 0.14,
+                   'Al10': 0.025, # measured, runs 167, 168
+                   'Al15': 2.8e-3,
+                  }
+        if filterStr not in dict_Tr:
+            return 1.
+        return dict_Tr[filterStr]
+    
+    resource_package = __name__
+    resource_path = '/Al_att_length.txt'
+    fileName = pkg_resources.resource_stream(resource_package,
+                                             resource_path)
+    e_eV, attLength = np.loadtxt(fileName, skiprows=3, unpack=True)
+    dict_length = {'NoFilter': 0.,
+                   'Al3.5': 3.43, # measured, runs 757, 764
+                   'Al5': 5.,
+                   'Al10': 10.05, # measured, runs 167, 168
+                   'Al15': 15.,
+                  }
+    if filterStr not in dict_length:
+        return np.ones(energy.shape)
+    length = dict_length[filterStr]
+    tr = np.interp(energy, e_eV, np.exp(-length/attLength))
+    if isinstance(energy, xr.DataArray):
+        tr = xr.DataArray(tr, dims=energy.dims, coords=energy.coords,
+                          name='filterTr')
+    return tr
+        
+        
 def removePolyBaseline(x, spectra, deg=8, signalRange=[910, 970]):
     """
     Removes a polynomial baseline to a signal, assuming a fixed
@@ -283,7 +306,6 @@ def calibrate_viking(x, runNB):
     return np.poly1d(coeffs)(x)
 
 
-
 def concatenateRuns(data, runList):
     ''' Concatenates data for specified runs into a single dataset.
         Inputs:
@@ -312,17 +334,24 @@ def update_runDict(runDict, runBounds, allRuns):
         runDict.update(partialDict)
     return
 
+
 def generate_partial_runList(runBoundsList, allRuns):
     ''' Generates a dictionary with data for selected runs.
         Inputs:
         ------
         runBoundsList: list
             array containing run numbers to be included in the output.
-            If it contains only integers: if it has one element, only this run number is added to the output; otherwise, the first and second element represent the boundaries for the range of run numbers to be included in the output (boundaries included)
-            If it contains lists: the output contains the union of the specified run numbers, each element is treated as a list of integers (see above)
+            If it contains only integers: if it has one element, only 
+            this run number is added to the output; otherwise, the first
+            and second element represent the boundaries for the range of
+            run numbers to be included in the output (boundaries included)
+            If it contains lists: the output contains the union of the
+            specified run numbers, each element is treated as a list of 
+            integers (see above).
             
         allRuns: dict
-            dictionary containing the information on runs from which the subset is to be generated
+            dictionary containing the information on runs from which the
+            subset is to be generated
             
         Outputs:
         ------
@@ -413,14 +442,15 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
                 ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
         ds.attrs['sample'] = params[2]
-        ds.attrs['filterTr'] = filterTransmission(params[3])
+        ds.attrs['filter'] = params[3]
+        ds['filterTr'] = filterTransmission(params[3], ds.x)
         if len(params) > 4:
             ds.attrs['pumpEnergy'] = params[4]
         if len(params) > 5:
             ds.attrs['sampleThickness'] = params[5]
         if len(params) > 6:
             ds.attrs['delay'] = params[6]
-        ds.attrs['scalingFactor'] = ds.attrs['countsToPhotoEl'] / ds.attrs['filterTr']
+        ds['scalingFactor'] = ds.attrs['countsToPhotoEl'] / ds['filterTr']
         data[runNB] = ds
     
     if append:
@@ -804,7 +834,7 @@ def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
 
 def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
              plotAbsCoefRange=None, plotErrors=False, save=False,
-             saveTitle='', legend='', sortby=None):
+             saveTitle='', legend='', sortby=None, ncol=3):
     ''' Plot reference spectra, sample spectra and effective absorption coefficient
         for a range of transmissions.
         Inputs:
@@ -858,14 +888,14 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         avg_penergy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
         Tr_ref = beamlineTransmission*avg_penergy_ref*attrs_ref['Tr_from_data']
         ref_err = mdata[r]['ref'].spectrum_meanError
-        ref_scaling = attrs_ref['scalingFactor']
+        ref_scaling = mdata[r]['ref']['scalingFactor']
         
         sample = mdata[r]['sample'].spectrum_nobl_avg
         attrs_sample = mdata[r]['sample'].attrs
         avg_penergy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
         Tr_sample = beamlineTransmission*avg_penergy_sample*attrs_sample['Tr_from_data']
         sample_err = mdata[r]['sample'].spectrum_meanError
-        sample_scaling = attrs_sample['scalingFactor']
+        sample_scaling = mdata[r]['sample']['scalingFactor']
         
         absorption = (ref * ref_scaling) / (sample * sample_scaling)
         absorptionCoef = np.log(absorption)/thickness
@@ -910,7 +940,7 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         ax[i].axvline(L3edge, ls='--', color='grey')
         ax[i].axvline(L2edge, ls='--', color='grey')
         ax[i].axvline(Lalpha, ls='--', color='darkgrey')
-        ax[i].legend(ncol=3, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
+        ax[i].legend(ncol=4, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
         ax[i].grid()
         
     ax[0].set_ylabel('reference')
