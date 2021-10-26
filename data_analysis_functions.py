@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import BaselineRemoval as br
 import json
 from multiprocessing import Pool
+import pkg_resources 
 
 def load_runs_from_file(fname):
     ''' Loads run data from a text file to a dictionary.
@@ -45,7 +46,10 @@ def get_camera_gain(run):
         return 4
 
 def photoelectronsPerCount_HS(gain):
-    ''' Conversion factor from camera gain to photoelectrons per count for High Sensitivity mode.
+    ''' Conversion factor from camera gain to photoelectrons
+        per count for High Sensitivity mode. The values can be found
+        in the camera datasheet but they have been slightly corrected
+        after analysis of runs 1204, 1207 and 1208.
         Inputs:
         ------
         gain: int
@@ -53,18 +57,19 @@ def photoelectronsPerCount_HS(gain):
             
         Outputs:
         ------
-        int:
+        float:
             photoelectrons per count
     '''
     if gain==1:
         return 4
     if gain==2:
-        return 2
+        return 2.05
     if gain==4:
-        return 0.9
+        return 0.97
     
 def photoelectronsPerCount_HC(gain):
-    ''' Conversion factor from camera gain to photoelectrons per count for High Capacity mode.
+    ''' Conversion factor from camera gain to photoelectrons per count
+        for High Capacity mode.
         Inputs:
         ------
         gain: int
@@ -91,30 +96,53 @@ def get_photoelectronsPerCount(run, gain):
         return photoelectronsPerCount_HC(gain)
     
 
-def filterTransmission(filterStr):
-    ''' Returns transmission of Al filters of specified thickness.
+def filterTransmission(filterStr, energy=None):
+    ''' Returns transmission of Al filters of specified thickness
+        for optional photon energy range.
         Inputs:
         ------
         filterStr: string
-            description of the filter with element name and thickness in microns; accepted values are 'Al3.5',  'Al5' or 'Al10'
-            
-        Outputs:
-        ------
-        float
-            transmission
+            description of the filter with element name and thickness in microns;
+            accepted values are 'Al3.5', 'Al5', 'Al10', 'Al15'
+        energy: xarray or 1d ndarray
+            energy axis for energy-dependent transmission
+        
+        Outputs
+        -------
+        transmission: float or xarray or 1d ndarray
+            If energy is provided, 1d array with same length is returned.
     '''
-    if filterStr == 'Al3.5':
-        return 0.25
-    if filterStr == 'Al5':
-        return 0.14
-    if filterStr == 'Al10':
-        return 0.02
-    if filterStr == 'Al15':
-        return 2.8e-3
-    if filterStr == 'Al13.5':
-        return 5e-3
-    return 1
-
+    if energy is None:
+        dict_Tr = {'Al3.5': 0.281, # measured, run 757, 764
+                   'Al5': 0.14,
+                   'Al10': 0.025, # measured, runs 167, 168
+                   'Al15': 2.8e-3,
+                  }
+        if filterStr not in dict_Tr:
+            return 1.
+        return dict_Tr[filterStr]
+    
+    resource_package = __name__
+    resource_path = '/Al_att_length.txt'
+    fileName = pkg_resources.resource_stream(resource_package,
+                                             resource_path)
+    e_eV, attLength = np.loadtxt(fileName, skiprows=3, unpack=True)
+    dict_length = {'NoFilter': 0.,
+                   'Al3.5': 3.43, # measured, runs 757, 764
+                   'Al5': 5.,
+                   'Al10': 10.05, # measured, runs 167, 168
+                   'Al15': 15.,
+                  }
+    if filterStr not in dict_length:
+        return np.ones(energy.shape)
+    length = dict_length[filterStr]
+    tr = np.interp(energy, e_eV, np.exp(-length/attLength))
+    if isinstance(energy, xr.DataArray):
+        tr = xr.DataArray(tr, dims=energy.dims, coords=energy.coords,
+                          name='filterTr')
+    return tr
+        
+        
 def removePolyBaseline(x, spectra, deg=8, signalRange=[910, 970]):
     """
     Removes a polynomial baseline to a signal, assuming a fixed
@@ -186,7 +214,8 @@ def removeBaseline(spectra, degree=5, repitition=100, gradient=0.001):
 def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512], 
             tid_shift=-1, use_dark=True, errors=False,
             signalRange=[920, 960]):
-    ''' Creates dataset for a run, subtracts dark background from the Viking spectrometer image and calculates the spectrum.
+    ''' Creates dataset for a run, subtracts dark background from the Viking
+        spectrometer image and calculates the spectrum.
         Inputs:
         ------
         proposal: int
@@ -202,7 +231,7 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
             dark run number
             
         use_dark: bool
-            if True it subtracts the dark background from the Viking spectrometer image
+            if True, subtracts the dark background from the Viking spectrometer image
             
         tid_shift: int
             overall shift for the train IDs
@@ -263,15 +292,18 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
 def calibrate_viking(x, runNB):
     """
     Calibration of Viking spectrometer using 2nd order polynomial,
-    based on analysis of runs 118-124 (proposal 2593) and run 1716
-    (proposal 2937).
+    based on analysis of:
+    - WK 41: runs 118-124 (proposal 2593), valid for runs 1 - 851
+    - WK 41: run 1716 (proposal 2937), valid for runs 1299 - 1718
+    - WK39: runs 894 - 902, valid for runs ***
     """
     if runNB <= 851: # Proposal 2593
         coeffs = [1.20078832e-05, 8.06816040e-02, 8.63353911e+02]
     elif runNB >= 1289: # Proposal 2937
         coeffs = [1.21597814e-05, 8.03133850e-02, 8.63770237e+02]
+    elif runNB >=874 and runNB <= 1288: # Proposal 2937
+        coeffs = [1.17677273e-05, 7.90306688e-02, 8.52688452e+02]
     return np.poly1d(coeffs)(x)
-
 
 
 def concatenateRuns(data, runList):
@@ -302,17 +334,24 @@ def update_runDict(runDict, runBounds, allRuns):
         runDict.update(partialDict)
     return
 
+
 def generate_partial_runList(runBoundsList, allRuns):
     ''' Generates a dictionary with data for selected runs.
         Inputs:
         ------
         runBoundsList: list
             array containing run numbers to be included in the output.
-            If it contains only integers: if it has one element, only this run number is added to the output; otherwise, the first and second element represent the boundaries for the range of run numbers to be included in the output (boundaries included)
-            If it contains lists: the output contains the union of the specified run numbers, each element is treated as a list of integers (see above)
+            If it contains only integers: if it has one element, only 
+            this run number is added to the output; otherwise, the first
+            and second element represent the boundaries for the range of
+            run numbers to be included in the output (boundaries included)
+            If it contains lists: the output contains the union of the
+            specified run numbers, each element is treated as a list of 
+            integers (see above).
             
         allRuns: dict
-            dictionary containing the information on runs from which the subset is to be generated
+            dictionary containing the information on runs from which the
+            subset is to be generated
             
         Outputs:
         ------
@@ -399,17 +438,19 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
             #ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x, ds.spectrum.mean(dim='trainId'))
             ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
             ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
-            ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
+            if 'transmission' in ds:
+                ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
         ds.attrs['sample'] = params[2]
-        ds.attrs['filterTr'] = filterTransmission(params[3])
+        ds.attrs['filter'] = params[3]
+        ds['filterTr'] = filterTransmission(params[3], ds.x)
         if len(params) > 4:
             ds.attrs['pumpEnergy'] = params[4]
         if len(params) > 5:
             ds.attrs['sampleThickness'] = params[5]
         if len(params) > 6:
             ds.attrs['delay'] = params[6]
-        ds.attrs['scalingFactor'] = ds.attrs['countsToPhotoEl'] / ds.attrs['filterTr']
+        ds['scalingFactor'] = ds.attrs['countsToPhotoEl'] / ds['filterTr']
         data[runNB] = ds
     
     if append:
@@ -463,7 +504,8 @@ def get_data_for_runList(proposal, runList, fields, roi, inputData={}, append=Fa
             #ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x, ds.spectrum.mean(dim='trainId'))
             ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
             ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
-            ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
+            if 'transmission' in ds:
+                ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
         ds.attrs['sample'] = params[2]
         ds.attrs['filterTr'] = filterTransmission(params[3])
@@ -657,8 +699,9 @@ def filter_trainIds_with_index(mdata, indexList):
     return
 
 def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scannerX=True,
-                            min_threshold=None, max_threshold=None, spectralRange=[920, 960],
-                            tid_indices=None, plot=True):
+                            frac=0.75, min_threshold=None, max_threshold=None,
+                            spectralRange=[920, 960], tid_indices=None, xgm_norm=True,
+                            plot=True):
     """
     Filters the rastered data by scanner X position, threshold on spectrum sum,
     and train Id indices.
@@ -682,11 +725,15 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
         trainIds where xStart - tolerance < scannerX < xStop + tolerance
     spectralRange: list of float
         the spectral range for which to compute the sum for threshold filtering
+    frac: float, optional
+        Only used if min_threshold is None. Sets min_threshold to frac * median.
     min_threshold: float, optional
-        the minimum spectral sum value. If None, equals 0.75 * median.
+        the minimum spectral sum value. If None, equals frac * median.
     max_threshold: float, optional
         the maximum spectral sum value. If None, no upper limit for filtering.
     tid_indices: list of list of int
+    xgm_norm: bool
+        If True, normalizes the spectral sum by the XTD10 XGM
     plot: bool
         plot the results of the filtering operation if True.
     
@@ -697,25 +744,27 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
     """
     scannerX_mask = ds.trainId.astype(bool)
     if use_scannerX:
-        if xStart is None:
-            xStart = ds.scannerX[0]
-        if xStop is None:
-            xStop = ds.scannerX[-1]
-        scannerX_mask = (ds.scannerX < xStart - tolerance) & (ds.scannerX > xStop + tolerance)
+        #if xStart is None:
+        #    xStart = ds.scannerX[0]
+        #if xStop is None:
+        #    xStop = ds.scannerX[-1]
+        #scannerX_mask = (ds.scannerX < xStart - tolerance) & (ds.scannerX > xStop + tolerance)
         scannerX_diff = ds.scannerX.diff(dim='trainId')
         mask = np.ones(ds.scannerX.shape, dtype=bool)
         n = 5
         for i, v in enumerate(scannerX_diff[:-n].values):
             if v==0 and scannerX_diff[i+n]==0:
                 mask[i:i+n] = False
-        scannerX_mask = scannerX_mask & mask
-
+        #scannerX_mask = scannerX_mask & mask
+        scannerX_mask = xr.DataArray(mask, dims=['trainId'], 
+                                     coords={'trainId': ds.scannerX.trainId})
     specsum = ds.spectrum.sel(x=slice(spectralRange[0],
                                       spectralRange[1])).sum(dim='x')
-    specsum = specsum / ds.XTD10_SA3.mean(dim='sa3_pId') * ds.XTD10_SA3.mean()
+    if xgm_norm:
+        specsum = specsum / ds.XTD10_SA3.mean(dim='sa3_pId') * ds.XTD10_SA3.mean()
     
     if min_threshold is None:
-        min_threshold = 0.65 * specsum.where(
+        min_threshold = frac * specsum.where(
             specsum >= specsum.mean()).median()
     threshold_mask = specsum > min_threshold
     if max_threshold is not None:
@@ -785,7 +834,7 @@ def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
 
 def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
              plotAbsCoefRange=None, plotErrors=False, save=False,
-             saveTitle='', legend='', sortby=None):
+             saveTitle='', legend='', sortby=None, ncol=3):
     ''' Plot reference spectra, sample spectra and effective absorption coefficient
         for a range of transmissions.
         Inputs:
@@ -822,6 +871,7 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         
     '''
     beamlineTransmission = 0.32
+    Lalpha = 929.7
     L3edge = 932.7
     L2edge = 952.3
     nPlots = 4
@@ -838,29 +888,29 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         avg_penergy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
         Tr_ref = beamlineTransmission*avg_penergy_ref*attrs_ref['Tr_from_data']
         ref_err = mdata[r]['ref'].spectrum_meanError
-        ref_scaling = attrs_ref['scalingFactor']
+        ref_scaling = mdata[r]['ref']['scalingFactor']
         
         sample = mdata[r]['sample'].spectrum_nobl_avg
         attrs_sample = mdata[r]['sample'].attrs
         avg_penergy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
         Tr_sample = beamlineTransmission*avg_penergy_sample*attrs_sample['Tr_from_data']
         sample_err = mdata[r]['sample'].spectrum_meanError
-        sample_scaling = attrs_sample['scalingFactor']
+        sample_scaling = mdata[r]['sample']['scalingFactor']
         
         absorption = (ref * ref_scaling) / (sample * sample_scaling)
         absorptionCoef = np.log(absorption)/thickness
         
         ax[0].plot(mdata[r]['ref'].x, ref * ref_scaling, 
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         ax[1].plot(mdata[r]['sample'].x, sample * sample_scaling,
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         ax[2].plot(mdata[r]['sample'].x, absorption,
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         ax[3].plot(mdata[r]['sample'].x, absorptionCoef,
-                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.2f}%, ')#
+                   label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         
         if plotErrors:
@@ -889,7 +939,8 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
     for i in range(nPlots):
         ax[i].axvline(L3edge, ls='--', color='grey')
         ax[i].axvline(L2edge, ls='--', color='grey')
-        ax[i].legend(ncol=2, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
+        ax[i].axvline(Lalpha, ls='--', color='darkgrey')
+        ax[i].legend(ncol=4, fontsize=8) #, bbox_to_anchor=(1.04,1.0), loc='upper left')
         ax[i].grid()
         
     ax[0].set_ylabel('reference')
