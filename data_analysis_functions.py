@@ -44,39 +44,28 @@ def get_camera_gain(run):
     return gain_dict[gain]
 
 
-def photoelectronsPerCount_HS(gain):
+def photoelectronsPerCount(gain, mode='HS'):
     ''' Conversion factor from camera gain to photoelectrons
-        per count for High Sensitivity mode. The values can be found
+        per count. The values can be found
         in the camera datasheet but they have been slightly corrected
-        after analysis of runs 1204, 1207 and 1208.
+        for High Sensitivity mode after analysis of runs 1204, 1207 and 1208.
+
         Inputs:
         ------
         gain: int
             camera gain; allowed values are 1, 2, or 4
-            
+        mode: string
+            High sensitivity 'HS' or high capacity 'HC'
+
         Outputs:
         ------
         float:
             photoelectrons per count
     '''
-    pe_dict = {1: 4., 2: 2.05, 4: 0.97}
-    return pe_dict[gain]
-
-
-def photoelectronsPerCount_HC(gain):
-    ''' Conversion factor from camera gain to photoelectrons per count
-        for High Capacity mode.
-        Inputs:
-        ------
-        gain: int
-            camera gain; allowed values are 1, 2, or 4
-            
-        Outputs:
-        ------
-        int:
-            photoelectrons per count
-    '''
-    pe_dict = {1: 17.9, 2: 9., 4: 4.5}
+    if mode=='HS':
+        pe_dict = {1: 4., 2: 2.05, 4: 0.97}
+    else:
+        pe_dict = {1: 17.9, 2: 9., 4: 4.5}
     return pe_dict[gain]
 
 
@@ -84,10 +73,8 @@ def get_photoelectronsPerCount(run, gain):
     sel = run.select_trains([0])
     hc = sel.get_array('SCS_EXP_NEWTON/CAM/CAMERA',
                        'HighCapacity.value').item()
-    if hc == 0:
-        return photoelectronsPerCount_HS(gain)
-    else:
-        return photoelectronsPerCount_HC(gain)
+    mode = 'HS' if hc == 0 else 'HC'
+    return photoelectronsPerCount(gain, mode)
     
 
 def filterTransmission(filterStr, energy=None):
