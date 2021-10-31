@@ -17,12 +17,14 @@ def load_runs_from_file(fname):
             
         Outputs:
         ------
-        dict: dictionary with run numbers as keys and an array of run parameters as values
+        dict: dictionary with run numbers as keys and an array of
+        run parameters as values
     '''
     with open(fname) as f:
         data = f.read()
     dataDict =  json.loads(data)
     return {int(key): value for key, value in dataDict.items()}
+
 
 def get_camera_gain(run):
     ''' Get gain of the camera in the Viking spectrometer for a specified run.
@@ -37,63 +39,42 @@ def get_camera_gain(run):
             gain
     '''
     sel = run.select_trains([0])
-    gain = sel.get_array('SCS_EXP_NEWTON/CAM/CAMERA', 'preampGain.value')
-    if gain == 0:
-        return 1
-    if gain == 1:
-        return 2
-    if gain == 2:
-        return 4
+    gain = sel.get_array('SCS_EXP_NEWTON/CAM/CAMERA', 'preampGain.value').item()
+    gain_dict = {0: 1, 1: 2, 2: 4}
+    return gain_dict[gain]
 
-def photoelectronsPerCount_HS(gain):
+
+def photoelectronsPerCount(gain, mode='HS'):
     ''' Conversion factor from camera gain to photoelectrons
-        per count for High Sensitivity mode. The values can be found
+        per count. The values can be found
         in the camera datasheet but they have been slightly corrected
-        after analysis of runs 1204, 1207 and 1208.
+        for High Sensitivity mode after analysis of runs 1204, 1207 and 1208.
+
         Inputs:
         ------
         gain: int
             camera gain; allowed values are 1, 2, or 4
-            
+        mode: string
+            High sensitivity 'HS' or high capacity 'HC'
+
         Outputs:
         ------
         float:
             photoelectrons per count
     '''
-    if gain==1:
-        return 4
-    if gain==2:
-        return 2.05
-    if gain==4:
-        return 0.97
-    
-def photoelectronsPerCount_HC(gain):
-    ''' Conversion factor from camera gain to photoelectrons per count
-        for High Capacity mode.
-        Inputs:
-        ------
-        gain: int
-            camera gain; allowed values are 1, 2, or 4
-            
-        Outputs:
-        ------
-        int:
-            photoelectrons per count
-    '''
-    if gain==1:
-        return 17.9
-    if gain==2:
-        return 9
-    if gain==4:
-        return 4.5
-    
+    if mode=='HS':
+        pe_dict = {1: 4., 2: 2.05, 4: 0.97}
+    else:
+        pe_dict = {1: 17.9, 2: 9., 4: 4.5}
+    return pe_dict[gain]
+
+
 def get_photoelectronsPerCount(run, gain):
     sel = run.select_trains([0])
-    hc = sel.get_array('SCS_EXP_NEWTON/CAM/CAMERA', 'HighCapacity.value').item()
-    if hc == 0:
-        return photoelectronsPerCount_HS(gain)
-    else:
-        return photoelectronsPerCount_HC(gain)
+    hc = sel.get_array('SCS_EXP_NEWTON/CAM/CAMERA',
+                       'HighCapacity.value').item()
+    mode = 'HS' if hc == 0 else 'HC'
+    return photoelectronsPerCount(gain, mode)
     
 
 def filterTransmission(filterStr, energy=None):
@@ -102,8 +83,8 @@ def filterTransmission(filterStr, energy=None):
         Inputs:
         ------
         filterStr: string
-            description of the filter with element name and thickness in microns;
-            accepted values are 'Al3.5', 'Al5', 'Al10', 'Al15'
+            description of the filter with element name and thickness
+            in microns; accepted values are 'Al3.5', 'Al5', 'Al10', 'Al15'
         energy: xarray or 1d ndarray
             energy axis for energy-dependent transmission
         
@@ -183,6 +164,7 @@ def removePolyBaseline(x, spectra, deg=8, signalRange=[910, 970]):
         final_bl[t] = np.poly1d(fit[:, t])(x)
     return spectra - final_bl
 
+
 def removeBaseline(spectra, degree=5, repitition=100, gradient=0.001):
     ''' Baseline removal using the BaselineRemoval package.
         Inputs:
@@ -237,7 +219,8 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
             overall shift for the train IDs
             
         roi: list or 1d ndarray
-            region of interest for the Viking spectrometer image; [xMin, xMax, yMin, yMax]
+            region of interest for the Viking spectrometer image;
+            [xMin, xMax, yMin, yMax]
             
         errors: bool
             If true, also calculates mean spectrum with baseline removed, standard 
@@ -282,12 +265,14 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
     energy = calibrate_viking(ds.x, runNB)
     ds = ds.assign_coords({'x': energy})
     
-    ds['spectrum_nobl'] = removePolyBaseline(ds.x, ds.spectrum, signalRange=signalRange)
+    ds['spectrum_nobl'] = removePolyBaseline(ds.x, ds.spectrum, 
+                                             signalRange=signalRange)
     if errors:
         ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
         ds['spectrum_meanError'] = ds.spectrum_nobl / np.sqrt(ds.trainId.size)
     
     return run, ds
+
 
 def calibrate_viking(x, runNB):
     """
@@ -326,11 +311,13 @@ def concatenateRuns(data, runList):
     ds.attrs['runNB'] = runNB
     return ds
 
+
 def update_runDict(runDict, runBounds, allRuns):
     if len(runBounds) == 1:
         runDict.update({runBounds[0]: allRuns[runBounds[0]]})
     else:
-        partialDict = {i: allRuns[i] for i in range(runBounds[0], runBounds[1]+1) if i in allRuns.keys()}
+        partialDict = {i: allRuns[i] for i in range(runBounds[0], 
+                                                    runBounds[1]+1) if i in allRuns.keys()}
         runDict.update(partialDict)
     return
 
@@ -372,6 +359,7 @@ def generate_partial_runList(runBoundsList, allRuns):
             outDict[key] = value
             
     return outDict
+
 
 def get_data_for_runList_mp(proposal, runList, fields, roi,
                             inputData={}, append=False, errors=False,
@@ -459,8 +447,11 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
         return data
 
 
-def get_data_for_runList(proposal, runList, fields, roi, inputData={}, append=False, errors=False):
-    ''' Generates a dictionary containing datasets for the selected runs. For reference runs also removes baseline from spectra, and calculates the standard deviation and mean error of the spectra.
+def get_data_for_runList(proposal, runList, fields, roi, 
+                         inputData={}, append=False, errors=False):
+    ''' Generates a dictionary containing datasets for the selected
+        runs. For reference runs also removes baseline from spectra,
+        and calculates the standard deviation and mean error of the spectra.
         Inputs:
         ------
         proposal: int
@@ -473,16 +464,20 @@ def get_data_for_runList(proposal, runList, fields, roi, inputData={}, append=Fa
             list of mnemonics to load into the memory
             
         roi: list or 1d ndarray
-            region of interest for the Viking spectrometer image; [xMin, xMax, yMin, yMax]
+            region of interest for the Viking spectrometer image; 
+            [xMin, xMax, yMin, yMax]
             
         inputData: dict
-            dictionary with xarray Datasets, optional; the runs contained in this dictionary are omitted
+            dictionary with xarray Datasets, optional; the runs contained
+            in this dictionary are omitted
         
         append: bool
-            If true, the data is appended to inputData, else a copy is created to which the missing runs are added
+            If true, the data is appended to inputData, else a copy is
+            created to which the missing runs are added
             
         errors: bool
-            If true, also calculates mean spectrum with baseline removed, standard deviation of the spectra and standard error of the mean
+            If true, also calculates mean spectrum with baseline removed,
+            standard deviation of the spectra and standard error of the mean
             
         Outputs:
         ------
@@ -522,7 +517,8 @@ def get_data_for_runList(proposal, runList, fields, roi, inputData={}, append=Fa
         return
     else:
         return data
-    
+
+
 def unique(list1):
     unique_list = []
     for x in list1:
@@ -530,8 +526,10 @@ def unique(list1):
             unique_list.append(x)
     return unique_list
 
+
 def find_same_runs(runList):
-    ''' Finds sample runs with the same experimental parameters (excluding number of dark run).
+    ''' Finds sample runs with the same experimental parameters
+        (excluding number of dark run).
         Inputs:
         ------
         runList: dict
@@ -540,7 +538,8 @@ def find_same_runs(runList):
         Outputs:
         ------
         same_runs: list
-            list of lists which contain the numbers of runs with same experimental parameters
+            list of lists which contain the numbers of runs with
+            same experimental parameters
     '''
     same_runs = []
     for r in runList:
@@ -550,6 +549,7 @@ def find_same_runs(runList):
             same_runs.append(s)
     same_runs = unique(same_runs)
     return same_runs
+
 
 def partial_name_for_restructure(dataset, specifier):
     if specifier == 'Tr':
@@ -564,6 +564,7 @@ def partial_name_for_restructure(dataset, specifier):
         name = f'{dataset.attrs["delay"]}fs'
     return name
 
+
 def names_for_restructure(dataset, specifier):
     if isinstance(specifier, str):
         specifier = [specifier]
@@ -572,8 +573,12 @@ def names_for_restructure(dataset, specifier):
         name += partial_name_for_restructure(dataset, i) + '_'
     return name[:-1]
 
+
 def restructure_data(runList, data, specifier='Tr'):
-    ''' Divides the data for specified run numbers according to GATT transmission, and for each transmission according to run type (reference or sample). Concatenates sample runs with same experimental parameters into a single dataset.
+    ''' Divides the data for specified run numbers according to
+        GATT transmission, and for each transmission according to
+        run type (reference or sample). Concatenates sample runs with
+        same experimental parameters into a single dataset.
         Inputs:
         ------
         runList: dict
@@ -582,15 +587,20 @@ def restructure_data(runList, data, specifier='Tr'):
         data: dict 
             dictionary with xarray Datasets for the selected runs
             
-        specifier: string or list
-            string specifying by which parameter to restructure the data, currently implemented 'Tr', 'pumpEnergy', 'thickness' and 'both' (this one combines 'Tr' and 'pumpEnergy', it is obsolete with added list capabitity, but retained for backward compatibility)
-            If it is a list, the names are strings created by mergins the names for inidivual specifiers in the list; 
-            optional, default is 'Tr'
-        
+        specifier: string or list, optional, default='Tr'.
+            string specifying by which parameter to restructure the data,
+            currently implemented 'Tr', 'pumpEnergy', 'thickness' and 'both'
+            (this one combines 'Tr' and 'pumpEnergy', it is obsolete with 
+            added list capabitity, but retained for backward compatibility)
+            If it is a list, the names are strings created by mergins the 
+            names for inidivual specifiers in the list; 
+
         Outputs:
         ------
         mdata: dict
-            dictionary of which the keys are strings specifying the transmision and values are dictionaries. Each (sub-)dictionary contains xarray Datasets for the reference and sample runs
+            dictionary of which the keys are strings specifying the transmision
+            and values are dictionaries. Each (sub-)dictionary contains xarray
+            Datasets for the reference and sample runs
     '''
     mdata = {}
     for r in runList:
@@ -609,8 +619,10 @@ def restructure_data(runList, data, specifier='Tr'):
         mdata[name]['sample'] = ds
     return mdata
 
+
 def plot_counts_by_trainIds(ds, xLim, plotYRange = None, figsize=None):
-    ''' Plot total number of couns on newton camera (integrated image) as function of trainId for given run.
+    ''' Plot total number of couns on newton camera (integrated image)
+        as function of trainId for given run.
         Inputs:
         ------
         ds: xarray Dataset
@@ -642,6 +654,7 @@ def plot_counts_by_trainIds(ds, xLim, plotYRange = None, figsize=None):
     plt.show()
     return
 
+
 def filter_trainIds_with_count_thresholds(mdata, thresholdList, xLim):
     ''' Drop trainIds for which the total number of counts on the newton camera
         is outside the specified range. Modifies the datasets in mdata.
@@ -651,7 +664,8 @@ def filter_trainIds_with_count_thresholds(mdata, thresholdList, xLim):
             data restructured with respect to transmission and run type
             
         thresholdList: dict
-            dictionary of which keys are strings specifying transmission and values are lists with boundaries for the counts
+            dictionary of which keys are strings specifying transmission
+            and values are lists with boundaries for the counts
             
         xLim: list or 1d ndarray
             boundaries for integration over photon energy
@@ -668,6 +682,7 @@ def filter_trainIds_with_count_thresholds(mdata, thresholdList, xLim):
         mdata[r]['sample']['valid_tid'] = mdata[r]['sample'].trainId.isin(valid_tid)
     return
 
+
 def filter_trainIds_with_index(mdata, indexList):
     ''' Drop trainIds for which the total number of counts on the newton camera
         is outside the specified range. Modifies the datasets in mdata.
@@ -677,7 +692,8 @@ def filter_trainIds_with_index(mdata, indexList):
             data restructured with respect to specifier and run type
             
         indexList: dict
-            dictionary of which keys are strings specifiers and values are lists with boundaries for the trainId
+            dictionary of which keys are strings specifiers and values are
+            lists with boundaries for the trainId
             indices
             
         Outputs:
@@ -689,14 +705,15 @@ def filter_trainIds_with_index(mdata, indexList):
             continue
         all_indices = []
         for i in indices:
-            valid_tid = mdata[r]['sample'].trainId.sel(trainId=slice(mdata[r]['sample'].trainId[i[0]], 
-                                                             mdata[r]['sample'].trainId[i[1]]))
-                                              
+            valid_tid = mdata[r]['sample'].trainId.sel(
+                trainId=slice(mdata[r]['sample'].trainId[i[0]],
+                              mdata[r]['sample'].trainId[i[1]]))
             all_indices += list(valid_tid.values)
         all_indices = np.unique(all_indices)
         mdata[r]['sample']['valid_tid'] = mdata[r]['sample'].trainId.isin(all_indices)
         
     return
+
 
 def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scannerX=True,
                             frac=0.75, min_threshold=None, max_threshold=None,
@@ -821,16 +838,20 @@ def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
     '''
     for r in mdata:
         for k in ['ref', 'sample']:
+            ds = mdata[r][k]
             if k=='ref':
-                tid = mdata[r][k].trainId
+                tid = ds.trainId
             else:
-                tid = mdata[r][k].valid_tid
-            mdata[r][k]['spectrum_nobl_avg'] = removeBaseline(mdata[r][k].spectrum.sel(trainId=tid).mean(dim='trainId'),
-                                                              degree, repitition, gradient)
-            mdata[r][k]['spectrum_std'] = mdata[r][k].spectrum.sel(trainId=tid).std(dim='trainId')
-            mdata[r][k]['spectrum_meanError'] = mdata[r][k].spectrum_std / np.sqrt(tid.size)
-            mdata[r][k].attrs['Tr_from_data'] = mdata[r][k].transmission.sel(trainId=tid).mean(dim='trainId').values * 1e-2
+                tid = ds.valid_tid
+            mdata[r][k]['spectrum_nobl_avg'] = removeBaseline(
+                ds.spectrum.sel(trainId=tid).mean(dim='trainId'),
+                degree, repitition, gradient)
+            ds['spectrum_std'] = ds.spectrum.sel(trainId=tid).std(dim='trainId')
+            ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(tid.size)
+            ds.attrs['Tr_from_data'] = ds.transmission.sel(
+                trainId=tid).mean(dim='trainId').values * 1e-2
     return
+
 
 def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
              plotAbsCoefRange=None, plotErrors=False, save=False,
