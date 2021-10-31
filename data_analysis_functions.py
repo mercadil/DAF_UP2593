@@ -39,7 +39,7 @@ def get_camera_gain(run):
             gain
     '''
     sel = run.select_trains([0])
-    gain = sel.get_array('SCS_EXP_NEWTON/CAM/CAMERA', 'preampGain.value')
+    gain = sel.get_array('SCS_EXP_NEWTON/CAM/CAMERA', 'preampGain.value').item()
     gain_dict = {0: 1, 1: 2, 2: 4}
     return gain_dict[gain]
 
