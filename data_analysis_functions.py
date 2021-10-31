@@ -4,27 +4,13 @@ import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
 import BaselineRemoval as br
-import json
 from multiprocessing import Pool
 import pkg_resources 
 
-def load_runs_from_file(fname):
-    ''' Loads run data from a text file to a dictionary.
-        Inputs:
-        ------
-        fname: string
-            name of the file
-            
-        Outputs:
-        ------
-        dict: dictionary with run numbers as keys and an array of
-        run parameters as values
-    '''
-    with open(fname) as f:
-        data = f.read()
-    dataDict =  json.loads(data)
-    return {int(key): value for key, value in dataDict.items()}
 
+################################################################################
+######################## Camera settings, Viking calibration ###################
+################################################################################
 
 def get_camera_gain(run):
     ''' Get gain of the camera in the Viking spectrometer for a specified run.
@@ -77,6 +63,27 @@ def get_photoelectronsPerCount(run, gain):
     return photoelectronsPerCount(gain, mode)
     
 
+def calibrate_viking(x, runNB):
+    """
+    Calibration of Viking spectrometer using 2nd order polynomial,
+    based on analysis of:
+    - WK 41: runs 118-124 (proposal 2593), valid for runs 1 - 851
+    - WK 41: run 1716 (proposal 2937), valid for runs 1299 - 1718
+    - WK39: runs 894 - 902, valid for runs ***
+    """
+    if runNB <= 851: # Proposal 2593
+        coeffs = [1.20078832e-05, 8.06816040e-02, 8.63353911e+02]
+    elif runNB >= 1289: # Proposal 2937
+        coeffs = [1.21597814e-05, 8.03133850e-02, 8.63770237e+02]
+    elif runNB >=874 and runNB <= 1288: # Proposal 2937
+        coeffs = [1.17677273e-05, 7.90306688e-02, 8.52688452e+02]
+    return np.poly1d(coeffs)(x)
+
+
+################################################################################
+############################## Filters transmission ############################
+################################################################################
+
 def filterTransmission(filterStr, energy=None):
     ''' Returns transmission of Al filters of specified thickness
         for optional photon energy range.
@@ -124,6 +131,10 @@ def filterTransmission(filterStr, energy=None):
     return tr
         
         
+################################################################################
+############################## Baseline subtraction ############################
+################################################################################
+
 def removePolyBaseline(x, spectra, deg=8, signalRange=[910, 970]):
     """
     Removes a polynomial baseline to a signal, assuming a fixed
@@ -192,6 +203,39 @@ def removeBaseline(spectra, degree=5, repitition=100, gradient=0.001):
                                     coords=spectra.coords)
     return spectra_corr
 
+
+def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
+    ''' Removes baseline from spectra for concatenated sample runs,
+        and calculates the standard deviation and mean error of the
+        spectra with valid trainIds. Modifies the datasets in mdata.
+        Inputs:
+        ------
+        mdata: dict 
+            data restructured with respect to transmission and run type
+            
+        Outputs:
+        ------
+        
+    '''
+    for r in mdata:
+        for k in ['ref', 'sample']:
+            ds = mdata[r][k]
+            if k=='ref':
+                tid = ds.trainId
+            else:
+                tid = ds.valid_tid
+            mdata[r][k]['spectrum_nobl_avg'] = removeBaseline(
+                ds.spectrum.sel(trainId=tid).mean(dim='trainId'),
+                degree, repitition, gradient)
+            ds['spectrum_std'] = ds.spectrum.sel(trainId=tid).std(dim='trainId')
+            ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(tid.size)
+            ds.attrs['Tr_from_data'] = ds.transmission.sel(
+                trainId=tid).mean(dim='trainId').values * 1e-2
+    return
+
+################################################################################
+######################### Load run and list of runs ############################
+################################################################################
 
 def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512], 
             tid_shift=-1, use_dark=True, errors=False,
@@ -272,23 +316,6 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
         ds['spectrum_meanError'] = ds.spectrum_nobl / np.sqrt(ds.trainId.size)
     
     return run, ds
-
-
-def calibrate_viking(x, runNB):
-    """
-    Calibration of Viking spectrometer using 2nd order polynomial,
-    based on analysis of:
-    - WK 41: runs 118-124 (proposal 2593), valid for runs 1 - 851
-    - WK 41: run 1716 (proposal 2937), valid for runs 1299 - 1718
-    - WK39: runs 894 - 902, valid for runs ***
-    """
-    if runNB <= 851: # Proposal 2593
-        coeffs = [1.20078832e-05, 8.06816040e-02, 8.63353911e+02]
-    elif runNB >= 1289: # Proposal 2937
-        coeffs = [1.21597814e-05, 8.03133850e-02, 8.63770237e+02]
-    elif runNB >=874 and runNB <= 1288: # Proposal 2937
-        coeffs = [1.17677273e-05, 7.90306688e-02, 8.52688452e+02]
-    return np.poly1d(coeffs)(x)
 
 
 def concatenateRuns(data, runList):
@@ -446,6 +473,10 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
     else:
         return data
 
+
+################################################################################
+########################## Restructure list of runs ############################
+################################################################################
 
 def get_data_for_runList(proposal, runList, fields, roi, 
                          inputData={}, append=False, errors=False):
@@ -619,6 +650,10 @@ def restructure_data(runList, data, specifier='Tr'):
         mdata[name]['sample'] = ds
     return mdata
 
+
+################################################################################
+######################### Filter relevant train Ids ############################
+################################################################################
 
 def plot_counts_by_trainIds(ds, xLim, plotYRange = None, figsize=None):
     ''' Plot total number of couns on newton camera (integrated image)
@@ -823,35 +858,9 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
     return valid_mask
 
 
-def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
-    ''' Removes baseline from spectra for concatenated sample runs,
-        and calculates the standard deviation and mean error of the
-        spectra with valid trainIds. Modifies the datasets in mdata.
-        Inputs:
-        ------
-        mdata: dict 
-            data restructured with respect to transmission and run type
-            
-        Outputs:
-        ------
-        
-    '''
-    for r in mdata:
-        for k in ['ref', 'sample']:
-            ds = mdata[r][k]
-            if k=='ref':
-                tid = ds.trainId
-            else:
-                tid = ds.valid_tid
-            mdata[r][k]['spectrum_nobl_avg'] = removeBaseline(
-                ds.spectrum.sel(trainId=tid).mean(dim='trainId'),
-                degree, repitition, gradient)
-            ds['spectrum_std'] = ds.spectrum.sel(trainId=tid).std(dim='trainId')
-            ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(tid.size)
-            ds.attrs['Tr_from_data'] = ds.transmission.sel(
-                trainId=tid).mean(dim='trainId').values * 1e-2
-    return
-
+################################################################################
+################################## Plot XAS ####################################
+################################################################################
 
 def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
              plotAbsCoefRange=None, plotErrors=False, save=False,
