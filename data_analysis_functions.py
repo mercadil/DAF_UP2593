@@ -105,6 +105,7 @@ def filterTransmission(filterStr, energy=None):
         dict_Tr = {'Al3.5': 0.281, # measured, run 757, 764
                    'Al5': 0.14,
                    'Al10': 0.025, # measured, runs 167, 168
+                   'Al13.5': 5.0e-3,
                    'Al15': 2.8e-3,
                   }
         if filterStr not in dict_Tr:
@@ -120,15 +121,19 @@ def filterTransmission(filterStr, energy=None):
                    'Al3.5': 3.43, # measured, runs 757, 764
                    'Al5': 5.,
                    'Al10': 10.05, # measured, runs 167, 168
+                   'Al13.5': 13.5,
                    'Al15': 15.,
                   }
-    if filterStr not in dict_length:
-        return np.ones(energy.shape)
-    length = dict_length[filterStr]
-    tr = np.interp(energy, e_eV, np.exp(-length/attLength))
+    if filterStr in dict_length:
+        length = dict_length[filterStr]
+        tr = np.interp(energy, e_eV, np.exp(-length/attLength))
+    else:
+        print('Unknown filter - setting transmission to 1.')
+        tr = np.ones(energy.shape)
     if isinstance(energy, xr.DataArray):
         tr = xr.DataArray(tr, dims=energy.dims, coords=energy.coords,
                           name='filterTr')
+
     return tr
         
         
@@ -535,7 +540,7 @@ def get_data_for_runList(proposal, runList, fields, roi,
                 ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
         ds.attrs['sample'] = params[2]
-        ds.attrs['filterTr'] = filterTransmission(params[3])
+        ds.attrs['filterTr'] = filterTransmission(params[3], ds.x)
         if len(params) > 4:
             ds.attrs['pumpEnergy'] = params[4]
         if len(params) > 5:
