@@ -868,7 +868,7 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
 ########################## Compute and  plot XAS ###############################
 ################################################################################
 
-def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.32):
+def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
     if sortby=='Tr':
         keys = [mdata[k]['ref'].attrs['Tr'] for k in mdata.keys()]
         idx = np.argsort(keys) 
@@ -951,7 +951,7 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         ------
         
     '''
-    beamlineTransmission = 0.36
+    beamlineTransmission = 0.364
     Lalpha = 929.7
     L3edge = 932.7
     L2edge = 952.3
