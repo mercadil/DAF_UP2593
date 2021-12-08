@@ -905,6 +905,8 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
             ds.ref_err**2 / ds.ref**2 + ds.sample_err**2 / ds.sample**2)
         for at in mdata[r]['ref'].attrs:
             ds.attrs[at] = mdata[r]['ref'].attrs[at]
+        ds.attrs['refNB'] = ds.attrs.pop('runNB')
+        ds.attrs['sampleNB'] = mdata[r]['sample'].attrs['runNB']
         ds.attrs['Tr_from_data_sample'] = mdata[r]['sample'].attrs['Tr_from_data']
         ds.attrs['n_ref'] = mdata[r]['ref'].trainId.size
         ds.attrs['n_sample'] = mdata[r]['sample'].trainId.size
