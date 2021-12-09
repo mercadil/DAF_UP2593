@@ -594,7 +594,7 @@ def partial_name_for_restructure(dataset, specifier):
     elif specifier == 'pumpEnergy':
         name = f'pump{dataset.attrs["pumpEnergy"]}'
     elif specifier == 'both':
-        name = f'Tr{dataset.attrs["Tr"]}_pump{dataset.attrs["pumpEnergy"]}'
+        name = f'Tr{dataset.attrs["Tr"]}pump{dataset.attrs["pumpEnergy"]}'
     elif specifier == 'thickness':
         name = f'Cu{dataset.attrs["sampleThickness"]}'
     elif specifier == 'delay':
@@ -607,8 +607,8 @@ def names_for_restructure(dataset, specifier):
         specifier = [specifier]
     name = ''
     for i in specifier:
-        name += partial_name_for_restructure(dataset, i) + '_'
-    return name[:-1]
+        name += partial_name_for_restructure(dataset, i)
+    return name
 
 
 def restructure_data(runList, data, specifier='Tr'):
@@ -1047,3 +1047,73 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         fig.patch.set_alpha(1)
         plt.savefig('XAS_'+saveTitle+'.png', dpi=300, bbox_inches='tight')
     return fig, ax
+
+
+################################################################################
+########################## Compute and  plot XAS ###############################
+################################################################################
+
+def save_xas(filename, xas):
+    ''' Saves XAS dictionnary into data set.
+    Inputs
+    ------
+    filename: str
+        filename, including path
+    xas: dict
+        the XAS dictionnary generated in compute_xas()
+
+    Output
+    ------
+        HDF5 file with name filename
+    '''
+    ds = xas_dict_to_ds(xas)
+    ds.to_netcdf(filename)
+    print('saved xas data into '+filename)
+    return
+
+def xas_dict_to_ds(xas):
+    '''
+    Converts XAS dictionnary of datasets into one large xarray Dataset by adding
+    to each variable and attribute the key + '_'.
+    '''
+    ds = xr.Dataset()
+    for k in xas:
+        for d in xas[k]:
+            ds[f'{k}_{d}'] = xas[k][d]
+        for at in xas[k].attrs:
+            ds.attrs[f'{k}_{at}'] =  xas[k].attrs[at]
+    return ds
+
+def load_xas(filename):
+    ''' Loads XAS dataset into dictionnary.
+    Inputs
+    ------
+    filename: str
+        filename, including path
+
+    Output
+    ------
+    xas: dict
+        the XAS dictionnary generated in compute_xas()
+    '''
+    print('loading xas data from '+filename)
+    ds = xr.open_dataset(filename)
+    return xas_ds_to_dict(ds)
+
+def xas_ds_to_dict(ds):
+    '''
+    Converts XAS xarray Dataset into dict of datasets by turning the characters
+    before '_' in each variables into keys and creating small datasets for each key.
+    '''
+    xas_dict = {}
+    keys = list(set([k.split('_', 1)[0] for k in ds]))
+    for k in keys:
+        small_ds = xr.Dataset()
+        for d in ds:
+            if k in d:
+                small_ds[d.split('_', 1)[1]] = ds[d]
+        for at in ds.attrs:
+            if k in at:
+                small_ds.attrs[at.split('_', 1)[1]] = ds.attrs[at]
+        xas_dict[k] = small_ds
+    return xas_dict
