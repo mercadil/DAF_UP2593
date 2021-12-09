@@ -3,9 +3,10 @@ import extra_data as ed
 import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 import BaselineRemoval as br
 from multiprocessing import Pool
-import pkg_resources 
+import pkg_resources
 
 
 ################################################################################
@@ -104,6 +105,7 @@ def filterTransmission(filterStr, energy=None):
         dict_Tr = {'Al3.5': 0.281, # measured, run 757, 764
                    'Al5': 0.14,
                    'Al10': 0.025, # measured, runs 167, 168
+                   'Al13.5': 5.0e-3,
                    'Al15': 2.8e-3,
                   }
         if filterStr not in dict_Tr:
@@ -119,15 +121,19 @@ def filterTransmission(filterStr, energy=None):
                    'Al3.5': 3.43, # measured, runs 757, 764
                    'Al5': 5.,
                    'Al10': 10.05, # measured, runs 167, 168
+                   'Al13.5': 13.5,
                    'Al15': 15.,
                   }
-    if filterStr not in dict_length:
-        return np.ones(energy.shape)
-    length = dict_length[filterStr]
-    tr = np.interp(energy, e_eV, np.exp(-length/attLength))
+    if filterStr in dict_length:
+        length = dict_length[filterStr]
+        tr = np.interp(energy, e_eV, np.exp(-length/attLength))
+    else:
+        print('Unknown filter - setting transmission to 1.')
+        tr = np.ones(energy.shape)
     if isinstance(energy, xr.DataArray):
         tr = xr.DataArray(tr, dims=energy.dims, coords=energy.coords,
                           name='filterTr')
+
     return tr
         
         
@@ -534,7 +540,7 @@ def get_data_for_runList(proposal, runList, fields, roi,
                 ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
         ds.attrs['sample'] = params[2]
-        ds.attrs['filterTr'] = filterTransmission(params[3])
+        ds.attrs['filterTr'] = filterTransmission(params[3], ds.x)
         if len(params) > 4:
             ds.attrs['pumpEnergy'] = params[4]
         if len(params) > 5:
@@ -859,8 +865,55 @@ def filter_sample_rastering(ds, xStart=None, xStop=None, tolerance=0.1, use_scan
 
 
 ################################################################################
-################################## Plot XAS ####################################
+########################## Compute and  plot XAS ###############################
 ################################################################################
+
+def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
+    if sortby=='Tr':
+        keys = [mdata[k]['ref'].attrs['Tr'] for k in mdata.keys()]
+        idx = np.argsort(keys) 
+        ordered = np.array([k for k in mdata.keys()])[idx]
+    else:
+        ordered = [k for k in mdata.keys()]
+    result = {}
+    for r in ordered:
+        ds = xr.Dataset()
+        ref = mdata[r]['ref'].spectrum_nobl_avg
+        attrs_ref = mdata[r]['ref'].attrs
+        avg_penergy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
+        Tr_ref = beamlineTr*avg_penergy_ref*attrs_ref['Tr_from_data']
+        ref_err = mdata[r]['ref'].spectrum_meanError
+        ref_scaling = mdata[r]['ref']['scalingFactor']
+        
+        sample = mdata[r]['sample'].spectrum_nobl_avg
+        attrs_sample = mdata[r]['sample'].attrs
+        avg_penergy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
+        Tr_sample = beamlineTr*avg_penergy_sample*attrs_sample['Tr_from_data']
+        sample_err = mdata[r]['sample'].spectrum_meanError
+        sample_scaling = mdata[r]['sample']['scalingFactor']
+        
+        ds['ref'] = ref * ref_scaling
+        ds['sample'] = sample * sample_scaling
+        ds['ref_err'] = ref_err * ref_scaling
+        ds['sample_err'] = sample_err * sample_scaling
+        ds['absorption'] = ds.ref / ds.sample
+        # assume zero covariance between ref and sample spectra... check!
+        ds['absorption_error'] = np.abs(ds.absorption) * np.sqrt(
+            ds.ref_err**2 / ds.ref**2 + ds.sample_err**2 / ds.sample**2)
+        ds['absorptionCoef'] = np.log(ds.absorption)/thickness
+        ds['absorptionCoef_error'] = 1 / thickness * np.sqrt(
+            ds.ref_err**2 / ds.ref**2 + ds.sample_err**2 / ds.sample**2)
+        for at in mdata[r]['ref'].attrs:
+            ds.attrs[at] = mdata[r]['ref'].attrs[at]
+        ds.attrs['refNB'] = ds.attrs.pop('runNB')
+        ds.attrs['sampleNB'] = mdata[r]['sample'].attrs['runNB']
+        ds.attrs['Tr_from_data_sample'] = mdata[r]['sample'].attrs['Tr_from_data']
+        ds.attrs['n_ref'] = mdata[r]['ref'].trainId.size
+        ds.attrs['n_sample'] = mdata[r]['sample'].trainId.size
+        result[r] = ds
+        
+    return result
+
 
 def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
              plotAbsCoefRange=None, plotErrors=False, save=False,
@@ -900,19 +953,21 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         ------
         
     '''
-    beamlineTransmission = 0.32
+    beamlineTransmission = 0.364
     Lalpha = 929.7
     L3edge = 932.7
     L2edge = 952.3
     nPlots = 4
     if sortby=='Tr':
-        keys = [float(k.replace('Tr', '')) for k in mdata.keys()]
+        keys = [mdata[k]['ref'].attrs['Tr'] for k in mdata.keys()]
         idx = np.argsort(keys) 
         ordered = np.array([k for k in mdata.keys()])[idx]
     else:
         ordered = [k for k in mdata.keys()]
+    colors = iter(cm.rainbow(np.linspace(0, 1, len(ordered))))
     fig, ax = plt.subplots(nPlots, 1, sharex=True, figsize=(8,15))
     for r in ordered:
+        c = next(colors)
         ref = mdata[r]['ref'].spectrum_nobl_avg
         attrs_ref = mdata[r]['ref'].attrs
         avg_penergy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
@@ -930,40 +985,40 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         absorption = (ref * ref_scaling) / (sample * sample_scaling)
         absorptionCoef = np.log(absorption)/thickness
         
-        ax[0].plot(mdata[r]['ref'].x, ref * ref_scaling, 
+        ax[0].plot(mdata[r]['ref'].x, ref * ref_scaling, color=c,
                    label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
-        ax[1].plot(mdata[r]['sample'].x, sample * sample_scaling,
+        ax[1].plot(mdata[r]['sample'].x, sample * sample_scaling, color=c,
                    label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
-        ax[2].plot(mdata[r]['sample'].x, absorption,
+        ax[2].plot(mdata[r]['sample'].x, absorption, color=c,
                    label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
-        ax[3].plot(mdata[r]['sample'].x, absorptionCoef,
+        ax[3].plot(mdata[r]['sample'].x, absorptionCoef, color=c,
                    label=f'{Tr_sample:.2f} $\mu$J, {attrs_sample["Tr_from_data"]*100:.1g}%, ')#
                    #f'{np.floor(attrs_sample["delay"]):.0f} fs')
         
         if plotErrors:
             ax[0].fill_between(mdata[r]['ref'].x,
                                (ref - 1.96 * ref_err) * ref_scaling,
-                               (ref + 1.96 * ref_err) * ref_scaling,
+                               (ref + 1.96 * ref_err) * ref_scaling, color=c,
                                label='_nolegend_', alpha=0.4)
             ax[1].fill_between(mdata[r]['sample'].x,
                                (sample - 1.96 * sample_err) * sample_scaling,
-                               (sample + 1.96 * sample_err) * sample_scaling,
+                               (sample + 1.96 * sample_err) * sample_scaling, color=c,
                                label='_nolegend_', alpha=0.4)
             
             # assume zero covariance between reference and sample spectra... check!
             absorption_error = np.abs(absorption) * np.sqrt(ref_err**2 / ref**2 + sample_err**2 / sample**2)
-            ax[2].fill_between(mdata[r]['sample'].x, 
+            ax[2].fill_between(mdata[r]['sample'].x,
                                absorption - 1.96 * absorption_error,
-                               absorption + 1.96 * absorption_error, 
+                               absorption + 1.96 * absorption_error,  color=c,
                                label='_nolegend_', alpha=0.4)
             
             absorptionCoef_error = 1 / thickness * np.sqrt(ref_err**2 / ref**2 + sample_err**2 / sample**2)
-            ax[3].fill_between(mdata[r]['sample'].x, 
+            ax[3].fill_between(mdata[r]['sample'].x,
                                absorptionCoef - 1.96 * absorptionCoef_error,
-                               absorptionCoef + 1.96 * absorptionCoef_error,
+                               absorptionCoef + 1.96 * absorptionCoef_error, color=c,
                                label='_nolegend_', alpha=0.4)
         
     for i in range(nPlots):
