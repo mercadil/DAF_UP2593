@@ -230,11 +230,14 @@ def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
                 tid = ds.trainId
             else:
                 tid = ds.valid_tid
-            mdata[r][k]['spectrum_nobl_avg'] = removeBaseline(
-                ds.spectrum.sel(trainId=tid).mean(dim='trainId'),
-                degree, repitition, gradient)
+            #mdata[r][k]['spectrum_nobl_avg'] = removeBaseline(
+            #    ds.spectrum.sel(trainId=tid).mean(dim='trainId'),
+            #    degree, repitition, gradient)
+            mdata[r][k]['spectrum_nobl_avg'] = mdata[r][k]['spectrum_nobl'].sel(
+                trainId=tid).mean(dim='trainId')
+            
             ds['spectrum_std'] = ds.spectrum.sel(trainId=tid).std(dim='trainId')
-            ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(tid.size)
+            ds['spectrum_stderr'] = ds.spectrum_std / np.sqrt(tid.size)
             ds.attrs['Tr_from_data'] = ds.transmission.sel(
                 trainId=tid).mean(dim='trainId').values * 1e-2
     return
@@ -245,7 +248,7 @@ def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
 
 def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512], 
             tid_shift=-1, use_dark=True, errors=False,
-            signalRange=[920, 960]):
+            signalRange=[920, 960], use_scs_xgm=True):
     ''' Creates dataset for a run, subtracts dark background from the Viking
         spectrometer image and calculates the spectrum.
         Inputs:
@@ -284,22 +287,45 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
         ds: xarray Dataset
             data recorded in the run
     '''
-    rois = {'newton': {'newton': {'roi': ed.by_index[roi[2]:roi[3], roi[0]:roi[1]],
-                                    'dim': ['y', 'x']},
-                       }
-           }
-    fields += ['newton', 'XTD10_SA3', 'transmission', 'scannerX']
+    
+    run = tb.open_run(proposal, runNB)
+    darkRun = None
+    if darkNB:
+        darkRun = tb.open_run(proposal, darkNB)
+    return run, load_from_dataCollection(run, runNB, fields, darkRun, darkNB,
+                                         roi, tid_shift, use_dark,
+                                         errors, signalRange, use_scs_xgm)
+
+
+def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
+                             roi=[0,2048, 0,512], tid_shift=-1, use_dark=True,
+                             errors=False, signalRange=[920, 960],
+                             use_scs_xgm=True):
+    
+    fields += ['transmission', 'scannerX']
     # remove duplicates
     fields = list(set(fields))
-    other_fields = [f for f in fields if f != 'newton']
-    ds = xr.Dataset()
-    run, ds = tb.load(proposal, runNB, other_fields)
-    run, newton = tb.load(proposal, runNB, 'newton', rois=rois)
-    newton = newton.assign_coords({'trainId': newton.trainId + tid_shift})
-    ds = ds.merge(newton.newton, join='inner')
-    if darkNB is not None and use_dark is True:
-        dark_run, dark_ds = tb.load(proposal, darkNB, 'newton', rois=rois)
-        ds['dark'] = dark_ds.newton.mean(dim='trainId')
+    other_fields = [f for f in fields if f not in ['newton', 'XTD10_SA3', 'SCS_SA3']]
+    da = []
+    for f in other_fields:
+        da.append(tb.get_array(run, f))
+    xgm = tb.get_xgm(run, 'XTD10_SA3')
+    newton = run.get_array(*tb.mnemonics_for_run(run)['newton'].values(),
+                           name='newton', roi=ed.by_index[roi[2]:roi[3], roi[0]:roi[1]],
+                           ).rename({'newt_x': 'x', 'newt_y': 'y'})
+    newton = newton.assign_coords({'trainId': newton.trainId + tid_shift,
+                                   'x': np.arange(roi[0], roi[1], dtype=int)})
+    ds = xr.merge(da + [newton, xgm.XTD10_SA3], join='inner')
+    if use_scs_xgm:
+        xgm_scs = tb.get_xgm(run, 'SCS_SA3')
+        if xgm_scs.trainId.size > 0:
+            ds = xr.merge([ds, xgm_scs['SCS_SA3']], join='inner')
+    if darkRun is not None and use_dark is True:
+        dark = darkRun.get_array(*tb.mnemonics_for_run(darkRun)['newton'].values(),
+                                 name='newton', 
+                                 roi=ed.by_index[roi[2]:roi[3], roi[0]:roi[1]],
+                                 ).rename({'newt_x': 'x', 'newt_y': 'y'})
+        ds['dark'] = dark.mean(dim='trainId')
         newton_nobg = ds['newton'] - ds['dark']
         ds['spectrum'] = newton_nobg.sum(dim='y')
     else:
@@ -311,7 +337,9 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
     ds.attrs['runNB'] = runNB
     ds.attrs['gain'] = get_camera_gain(run)
     ds.attrs['countsToPhotoEl'] = get_photoelectronsPerCount(run, ds.attrs['gain'])
-    
+    if 'SAM-Z-MOT' in ds:
+        ds.attrs['sample_z'] = ds['SAM-Z-MOT'].mean().values
+        ds = ds.drop('SAM-Z-MOT')
     energy = calibrate_viking(ds.x, runNB)
     ds = ds.assign_coords({'x': energy})
     
@@ -319,10 +347,9 @@ def get_run(proposal, runNB, fields, darkNB=None, roi=[0,2048, 0,512],
                                              signalRange=signalRange)
     if errors:
         ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
-        ds['spectrum_meanError'] = ds.spectrum_nobl / np.sqrt(ds.trainId.size)
+        ds['spectrum_stderr'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
     
-    return run, ds
-
+    return ds
 
 def concatenateRuns(data, runList):
     ''' Concatenates data for specified runs into a single dataset.
@@ -393,9 +420,13 @@ def generate_partial_runList(runBoundsList, allRuns):
             
     return outDict
 
+################################################################################
+########################## Restructure list of runs ############################
+################################################################################
 
 def get_data_for_runList_mp(proposal, runList, fields, roi,
                             inputData={}, append=False, errors=False,
+                            use_scs_xgm=True, signalRange=[920, 960],
                             nprocesses=None):
     '''
     Generates a dictionary containing datasets for the selected runs.
@@ -446,19 +477,23 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
         return data
     if nprocesses is None:
         nprocesses = min(16, len(runNBs))
-    args = [(proposal, runNB, fields, runList[runNB][0], roi) for runNB in runNBs]
     print(f'loading {len(runNBs)} runs {runNBs} with {nprocesses} processes.')
+    dataCollections = [tb.open_run(proposal, r) for r in runNBs]
+    darkDataCollections = [tb.open_run(proposal, runList[r][0]) for r in runNBs]
+    args = [(dataCollections[i], runNBs[i], fields, darkDataCollections[i], 
+             runList[runNBs[i]][0], roi, -1, True, False, signalRange, 
+             use_scs_xgm) for i in range(len(runNBs))]
     with Pool(nprocesses) as pool:
-        result = pool.starmap(get_run, args)
+        result = pool.starmap(load_from_dataCollection, args)
     
     for i, runNB in enumerate(runNBs):
         params = runList[runNB]
-        ds = result[i][1]
+        ds = result[i]
         darkNB = params[0]
         if params[2] == 'ref':
             #ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x, ds.spectrum.mean(dim='trainId'))
             ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
-            ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
+            ds['spectrum_stderr'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
             if 'transmission' in ds:
                 ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
@@ -480,12 +515,9 @@ def get_data_for_runList_mp(proposal, runList, fields, roi,
         return data
 
 
-################################################################################
-########################## Restructure list of runs ############################
-################################################################################
-
 def get_data_for_runList(proposal, runList, fields, roi, 
-                         inputData={}, append=False, errors=False):
+                         inputData={}, append=False, errors=False,
+                        use_scs_xgm=True):
     ''' Generates a dictionary containing datasets for the selected
         runs. For reference runs also removes baseline from spectra,
         and calculates the standard deviation and mean error of the spectra.
@@ -531,11 +563,12 @@ def get_data_for_runList(proposal, runList, fields, roi,
             continue
         print(runNB)
         darkNB = params[0]
-        run, ds = get_run(proposal, runNB, fields, darkNB=darkNB, roi=roi, errors=errors)
+        run, ds = get_run(proposal, runNB, fields, darkNB=darkNB, roi=roi, errors=errors,
+                          use_scs_xgm=use_scs_xgm)
         if params[2] == 'ref':
             #ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x, ds.spectrum.mean(dim='trainId'))
             ds['spectrum_std'] = ds.spectrum_nobl.std(dim='trainId')
-            ds['spectrum_meanError'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
+            ds['spectrum_stderr'] = ds.spectrum_std / np.sqrt(ds.trainId.size)
             if 'transmission' in ds:
                 ds.attrs['Tr_from_data'] = ds.transmission.mean(dim='trainId').values * 1e-2
         ds.attrs['Tr'] = params[1]
@@ -880,38 +913,54 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         ds = xr.Dataset()
         ref = mdata[r]['ref'].spectrum_nobl_avg
         attrs_ref = mdata[r]['ref'].attrs
-        avg_penergy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
-        Tr_ref = beamlineTr*avg_penergy_ref*attrs_ref['Tr_from_data']
-        ref_err = mdata[r]['ref'].spectrum_meanError
+        avg_energy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
+        avg_energy_ref *= beamlineTr*attrs_ref['Tr_from_data']
+        ref_std = mdata[r]['ref'].spectrum_std
+        ref_err = mdata[r]['ref'].spectrum_stderr
         ref_scaling = mdata[r]['ref']['scalingFactor']
-        
+        n_ref = mdata[r]['ref']['trainId'].size
+
         sample = mdata[r]['sample'].spectrum_nobl_avg
         attrs_sample = mdata[r]['sample'].attrs
-        avg_penergy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
-        Tr_sample = beamlineTr*avg_penergy_sample*attrs_sample['Tr_from_data']
-        sample_err = mdata[r]['sample'].spectrum_meanError
+        avg_energy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
+        avg_energy_sample *= beamlineTr*attrs_sample['Tr_from_data']
+        sample_std = mdata[r]['sample'].spectrum_std
+        sample_err = mdata[r]['sample'].spectrum_stderr
         sample_scaling = mdata[r]['sample']['scalingFactor']
-        
+        n_sample = mdata[r]['sample']['trainId'].sel(
+            trainId=mdata[r]['sample'].valid_tid).size
+
         ds['ref'] = ref * ref_scaling
+        ds['ref_std'] = ref_std * ref_scaling
+        ds['ref_stderr'] = ds['ref_std'] / np.sqrt(n_ref)
         ds['sample'] = sample * sample_scaling
-        ds['ref_err'] = ref_err * ref_scaling
-        ds['sample_err'] = sample_err * sample_scaling
-        ds['absorption'] = ds.ref / ds.sample
+        ds['sample_std'] = sample_std * sample_scaling
+        ds['sample_stderr'] = ds['sample_std'] / np.sqrt(n_sample)
         # assume zero covariance between ref and sample spectra... check!
-        ds['absorption_error'] = np.abs(ds.absorption) * np.sqrt(
-            ds.ref_err**2 / ds.ref**2 + ds.sample_err**2 / ds.sample**2)
-        ds['absorptionCoef'] = np.log(ds.absorption)/thickness
-        ds['absorptionCoef_error'] = 1 / thickness * np.sqrt(
-            ds.ref_err**2 / ds.ref**2 + ds.sample_err**2 / ds.sample**2)
+        ds['absorption'] = ds.ref / ds.sample
+        ds['absorption_std'] = np.abs(ds['absorption']) * np.sqrt(
+            ds.ref_std**2 / ds.ref**2 + ds.sample_std**2 / ds.sample**2)
+        ds['absorption_stderr'] = np.abs(ds['absorption']) * np.sqrt(
+            (ds['ref_stderr'] / ds['ref'])**2 + (ds['sample_stderr'] / ds['sample'])**2)
+
+        ds['absorptionCoef'] = np.log(ds['absorption']) / thickness
+        ds['absorptionCoef_std'] = ds['absorption_std'] / (thickness * np.abs(ds['absorption']))
+        ds['absorptionCoef_stderr'] = ds['absorption_stderr'] / (thickness * np.abs(ds['absorption']))
+
         for at in mdata[r]['ref'].attrs:
             ds.attrs[at] = mdata[r]['ref'].attrs[at]
         ds.attrs['refNB'] = ds.attrs.pop('runNB')
         ds.attrs['sampleNB'] = mdata[r]['sample'].attrs['runNB']
         ds.attrs['Tr_from_data_sample'] = mdata[r]['sample'].attrs['Tr_from_data']
-        ds.attrs['n_ref'] = mdata[r]['ref'].trainId.size
-        ds.attrs['n_sample'] = mdata[r]['sample'].trainId.size
+        ds.attrs['n_ref'] = n_ref
+        ds.attrs['n_sample'] = n_sample
+        ds.attrs['avg_energy_ref'] = avg_energy_ref
+        if 'SCS_SA3' in mdata[r]['ref']:
+            ds.attrs['avg_energy_SCS_ref'] = mdata[r]['ref'].SCS_SA3.mean().values
+        ds.attrs['avg_energy_sample'] = avg_energy_sample
+        if 'SCS_SA3' in mdata[r]['sample']:
+            ds.attrs['avg_energy_SCS_sample'] = mdata[r]['sample'].SCS_SA3.mean().values
         result[r] = ds
-        
     return result
 
 
@@ -972,14 +1021,14 @@ def plot_XAS(mdata, thickness, title='', plotXRange=None, plotAbsRange=None,
         attrs_ref = mdata[r]['ref'].attrs
         avg_penergy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
         Tr_ref = beamlineTransmission*avg_penergy_ref*attrs_ref['Tr_from_data']
-        ref_err = mdata[r]['ref'].spectrum_meanError
+        ref_err = mdata[r]['ref'].spectrum_stderr
         ref_scaling = mdata[r]['ref']['scalingFactor']
         
         sample = mdata[r]['sample'].spectrum_nobl_avg
         attrs_sample = mdata[r]['sample'].attrs
         avg_penergy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
         Tr_sample = beamlineTransmission*avg_penergy_sample*attrs_sample['Tr_from_data']
-        sample_err = mdata[r]['sample'].spectrum_meanError
+        sample_err = mdata[r]['sample'].spectrum_stderr
         sample_scaling = mdata[r]['sample']['scalingFactor']
         
         absorption = (ref * ref_scaling) / (sample * sample_scaling)
