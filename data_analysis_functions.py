@@ -919,7 +919,7 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         ref_err = mdata[r]['ref'].spectrum_stderr
         ref_scaling = mdata[r]['ref']['scalingFactor']
         n_ref = mdata[r]['ref']['trainId'].size
-        
+
         sample = mdata[r]['sample'].spectrum_nobl_avg
         attrs_sample = mdata[r]['sample'].attrs
         avg_energy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
@@ -935,16 +935,18 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         ds['ref_stderr'] = ds['ref_std'] / np.sqrt(n_ref)
         ds['sample'] = sample * sample_scaling
         ds['sample_std'] = sample_std * sample_scaling
-        ds['sample_stderr'] = ds['sample_std'] / np.sqrt(n_ref)
-        ds['absorption'] = ds.ref / ds.sample
+        ds['sample_stderr'] = ds['sample_std'] / np.sqrt(n_sample)
         # assume zero covariance between ref and sample spectra... check!
-        ds['absorption_std'] = np.abs(ds.absorption) * np.sqrt(
+        ds['absorption'] = ds.ref / ds.sample
+        ds['absorption_std'] = np.abs(ds['absorption']) * np.sqrt(
             ds.ref_std**2 / ds.ref**2 + ds.sample_std**2 / ds.sample**2)
-        ds['absorption_stderr'] = ds['absorption_std'] / np.sqrt(n_sample)
-        ds['absorptionCoef'] = np.log(ds.absorption)/thickness
-        ds['absorptionCoef_std'] = 1 / thickness * np.sqrt(
-            ds.ref_std**2 / ds.ref**2 + ds.sample_std**2 / ds.sample**2)
-        ds['absorptionCoef_stderr'] = ds['absorptionCoef_std'] / np.sqrt(n_sample)
+        ds['absorption_stderr'] = np.abs(ds['absorption']) * np.sqrt(
+            (ds['ref_stderr'] / ds['ref'])**2 + (ds['sample_stderr'] / ds['sample'])**2)
+
+        ds['absorptionCoef'] = np.log(ds['absorption']) / thickness
+        ds['absorptionCoef_std'] = ds['absorption_std'] / (thickness * np.abs(ds['absorption']))
+        ds['absorptionCoef_stderr'] = ds['absorption_stderr'] / (thickness * np.abs(ds['absorption']))
+
         for at in mdata[r]['ref'].attrs:
             ds.attrs[at] = mdata[r]['ref'].attrs[at]
         ds.attrs['refNB'] = ds.attrs.pop('runNB')
@@ -959,7 +961,6 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         if 'SCS_SA3' in mdata[r]['sample']:
             ds.attrs['avg_energy_SCS_sample'] = mdata[r]['sample'].SCS_SA3.mean().values
         result[r] = ds
-        
     return result
 
 
