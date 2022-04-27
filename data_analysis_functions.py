@@ -340,7 +340,7 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
         ds['spectrum'] = newton_nobg.sum(dim='y')
         ds['profile'] = newton_nobg.sel(x=slice(signalRange[0], signalRange[1])).sum(dim='x')
     else:
-        ds['spectrum'] = ds['newton'].sum(dim='y')
+        ds['spectrum'] = ds['newton'].astype(float).sum(dim='y')
         ds['profile'] = ds['newton'].sel(x=slice(signalRange[0], signalRange[1])).sum(dim='x')
     ds = ds.sortby(ds.trainId)
     ds['trainId'] = ds.trainId.astype(int)
@@ -922,7 +922,6 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
     for r in ordered:
         ds = xr.Dataset()
         ref = mdata[r]['ref'].spectrum_nobl_avg
-        ref_spectra = mdata[r]['ref']['spectrum_nobl']
         attrs_ref = mdata[r]['ref'].attrs
         avg_energy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
         avg_energy_ref *= beamlineTr*attrs_ref['Tr_from_data']
@@ -932,7 +931,6 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         n_ref = mdata[r]['ref']['trainId'].size
 
         sample = mdata[r]['sample'].spectrum_nobl_avg
-        sample_spectra = mdata[r]['sample']['spectrum_nobl']
         attrs_sample = mdata[r]['sample'].attrs
         avg_energy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
         avg_energy_sample *= beamlineTr*attrs_sample['Tr_from_data']
@@ -943,11 +941,9 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
             trainId=mdata[r]['sample'].valid_tid).size
 
         ds['ref'] = ref * ref_scaling
-        ds['ref_spectra'] = ref_spectra * ref_scaling
         ds['ref_std'] = ref_std * ref_scaling
         ds['ref_stderr'] = ds['ref_std'] / np.sqrt(n_ref)
         ds['sample'] = sample * sample_scaling
-        ds['sample_spectra'] = sample_spectra * ref_scaling
         ds['sample_std'] = sample_std * sample_scaling
         ds['sample_stderr'] = ds['sample_std'] / np.sqrt(n_sample)
         # assume zero covariance between ref and sample spectra... check!
@@ -960,7 +956,7 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         ds['absorptionCoef'] = np.log(ds['absorption']) / thickness
         ds['absorptionCoef_std'] = ds['absorption_std'] / (thickness * np.abs(ds['absorption']))
         ds['absorptionCoef_stderr'] = ds['absorption_stderr'] / (thickness * np.abs(ds['absorption']))
-
+        
         for at in mdata[r]['ref'].attrs:
             ds.attrs[at] = mdata[r]['ref'].attrs[at]
         ds.attrs['refNB'] = ds.attrs.pop('runNB')
@@ -1180,3 +1176,42 @@ def xas_ds_to_dict(ds):
                 small_ds.attrs[at.split('_', 1)[1]] = ds.attrs[at]
         xas_dict[k] = small_ds
     return xas_dict
+
+################################################################################
+########################## Save and load spectra ###############################
+################################################################################
+
+def save_spectra(filename, mdata, sortby=None):
+    if sortby=='Tr':
+        keys = [mdata[k]['ref'].attrs['Tr'] for k in mdata.keys()]
+        idx = np.argsort(keys) 
+        ordered = np.array([k for k in mdata.keys()])[idx]
+    else:
+        ordered = [k for k in mdata.keys()]
+    l = []
+    for r in ordered:
+        ref_spectra = mdata[r]['ref']['spectrum_nobl']
+        ref_scaling = mdata[r]['ref']['scalingFactor']
+        ref_spectra *= ref_scaling
+        ref_spectra = ref_spectra.rename(f'ref_spectra_{r}')
+        ref_spectra = ref_spectra.assign_coords({'trainId': np.arange(ref_spectra.sizes['trainId'])})
+        
+        sample_spectra = mdata[r]['sample']['spectrum_nobl'].where(mdata[r]['sample']['valid_tid'],
+                                                                    drop=True)
+        sample_scaling = mdata[r]['sample']['scalingFactor']
+        sample_spectra *= sample_scaling
+        sample_spectra = sample_spectra.rename(f'sample_spectra_{r}')
+        sample_spectra = sample_spectra.assign_coords({'trainId': np.arange(sample_spectra.sizes['trainId'])})
+
+        print(ref_spectra.max().values, sample_spectra.max().values)
+        l.append(ref_spectra)
+        l.append(sample_spectra)
+    ds = xr.merge(l)
+    ds.to_netcdf(filename)
+    print('saved spectra into ' + filename)
+    return
+    
+def load_spectra(filename):
+    print('loading spectra from ' + filename)
+    ds = xr.open_dataset(filename)
+    return ds
