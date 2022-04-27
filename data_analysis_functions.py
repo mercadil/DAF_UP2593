@@ -324,6 +324,8 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
     newton = newton.assign_coords({'trainId': newton.trainId + tid_shift,
                                    'x': np.arange(roi[0], roi[1], dtype=int)})
     ds = xr.merge(da + [newton, xgm.XTD10_SA3], join='inner')
+    energy = calibrate_viking(ds.x, runNB)
+    ds = ds.assign_coords({'x': energy})
     if use_scs_xgm:
         xgm_scs = tb.get_xgm(run, 'SCS_SA3')
         if xgm_scs.trainId.size > 0:
@@ -336,9 +338,10 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
         ds['dark'] = dark.mean(dim='trainId')
         newton_nobg = ds['newton'] - ds['dark']
         ds['spectrum'] = newton_nobg.sum(dim='y')
+        ds['profile'] = newton_nobg.sel(x=slice(signalRange[0], signalRange[1])).sum(dim='x')
     else:
         ds['spectrum'] = ds['newton'].sum(dim='y')
-            
+        ds['profile'] = ds['newton'].sel(x=slice(signalRange[0], signalRange[1])).sum(dim='x')
     ds = ds.sortby(ds.trainId)
     ds['trainId'] = ds.trainId.astype(int)
     ds.attrs['darkNB'] = darkNB
@@ -348,8 +351,6 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
     if 'SAM-Z-MOT' in ds:
         ds.attrs['sample_z'] = ds['SAM-Z-MOT'].mean().values
         ds = ds.drop('SAM-Z-MOT')
-    energy = calibrate_viking(ds.x, runNB)
-    ds = ds.assign_coords({'x': energy})
     
     ds['spectrum_nobl'] = removePolyBaseline(ds.x, ds.spectrum, 
                                              signalRange=signalRange)
@@ -921,6 +922,7 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
     for r in ordered:
         ds = xr.Dataset()
         ref = mdata[r]['ref'].spectrum_nobl_avg
+        ref_spectra = mdata[r]['ref']['spectrum_nobl']
         attrs_ref = mdata[r]['ref'].attrs
         avg_energy_ref = mdata[r]['ref'].XTD10_SA3.mean().values
         avg_energy_ref *= beamlineTr*attrs_ref['Tr_from_data']
@@ -930,6 +932,7 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         n_ref = mdata[r]['ref']['trainId'].size
 
         sample = mdata[r]['sample'].spectrum_nobl_avg
+        sample_spectra = mdata[r]['sample']['spectrum_nobl']
         attrs_sample = mdata[r]['sample'].attrs
         avg_energy_sample = mdata[r]['sample'].XTD10_SA3.mean().values
         avg_energy_sample *= beamlineTr*attrs_sample['Tr_from_data']
@@ -940,9 +943,11 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
             trainId=mdata[r]['sample'].valid_tid).size
 
         ds['ref'] = ref * ref_scaling
+        ds['ref_spectra'] = ref_spectra * ref_scaling
         ds['ref_std'] = ref_std * ref_scaling
         ds['ref_stderr'] = ds['ref_std'] / np.sqrt(n_ref)
         ds['sample'] = sample * sample_scaling
+        ds['sample_spectra'] = sample_spectra * ref_scaling
         ds['sample_std'] = sample_std * sample_scaling
         ds['sample_stderr'] = ds['sample_std'] / np.sqrt(n_sample)
         # assume zero covariance between ref and sample spectra... check!
