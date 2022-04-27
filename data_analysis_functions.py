@@ -375,7 +375,8 @@ def concatenateRuns(data, runList):
             contatenated dataset
     '''
     runNB = [data[r].attrs['runNB'] for r in runList]
-    ds = xr.concat([data[r] for r in runList], dim='trainId', data_vars='minimal')
+    ds = xr.concat([data[r] for r in runList], dim='trainId',
+                   data_vars='minimal', compat='override', coords='minimal')
     ds.attrs['runNB'] = runNB
     return ds
 
