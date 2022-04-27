@@ -210,7 +210,9 @@ def removeBaseline(spectra, degree=5, repitition=100, gradient=0.001):
     return spectra_corr
 
 
-def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
+def remove_sample_baseline(mdata, method='BaselineRemoval',
+                           degree=5, repitition=100, gradient=0.001,
+                           signalRange=[920, 970]):
     ''' Removes baseline from spectra for concatenated sample runs,
         and calculates the standard deviation and mean error of the
         spectra with valid trainIds. Modifies the datasets in mdata.
@@ -233,8 +235,14 @@ def remove_sample_baseline(mdata, degree=5, repitition=100, gradient=0.001):
             #mdata[r][k]['spectrum_nobl_avg'] = removeBaseline(
             #    ds.spectrum.sel(trainId=tid).mean(dim='trainId'),
             #    degree, repitition, gradient)
-            mdata[r][k]['spectrum_nobl_avg'] = mdata[r][k]['spectrum_nobl'].sel(
-                trainId=tid).mean(dim='trainId')
+            if method == 'BaselineRemoval':
+                ds['spectrum_nobl_avg'] = mdata[r][k]['spectrum_nobl'].sel(
+                    trainId=tid).mean(dim='trainId')
+            elif method == 'Polynom':
+                ds['spectrum_nobl_avg'] = removePolyBaseline(ds.x,
+                                                             ds['spectrum'].sel(trainId=tid).mean(dim='trainId'),
+                                                             deg=degree,
+                                                             signalRange=signalRange)
             
             ds['spectrum_std'] = ds.spectrum.sel(trainId=tid).std(dim='trainId')
             ds['spectrum_stderr'] = ds.spectrum_std / np.sqrt(tid.size)
@@ -367,7 +375,8 @@ def concatenateRuns(data, runList):
             contatenated dataset
     '''
     runNB = [data[r].attrs['runNB'] for r in runList]
-    ds = xr.concat([data[r] for r in runList], dim='trainId', data_vars='minimal')
+    ds = xr.concat([data[r] for r in runList], dim='trainId',
+                   data_vars='minimal', compat='override', coords='minimal')
     ds.attrs['runNB'] = runNB
     return ds
 
