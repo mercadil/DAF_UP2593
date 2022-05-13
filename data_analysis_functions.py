@@ -316,7 +316,11 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
     other_fields = [f for f in fields if f not in ['newton', 'XTD10_SA3', 'SCS_SA3']]
     da = []
     for f in other_fields:
-        da.append(tb.get_array(run, f))
+        try:
+            da.append(tb.get_array(run, f))
+        except Exception as e:
+            print(e)
+
     xgm = tb.get_xgm(run, 'XTD10_SA3')
     newton = run.get_array(*tb.mnemonics_for_run(run)['newton'].values(),
                            name='newton', roi=ed.by_index[roi[2]:roi[3], roi[0]:roi[1]],
