@@ -243,6 +243,8 @@ def remove_sample_baseline(mdata, method='BaselineRemoval',
                                                              ds['spectrum'].sel(trainId=tid).mean(dim='trainId'),
                                                              deg=degree,
                                                              signalRange=signalRange)
+            else:
+                raise ValueError('method not recognized.')
             
             ds['spectrum_std'] = ds.spectrum.sel(trainId=tid).std(dim='trainId')
             ds['spectrum_stderr'] = ds.spectrum_std / np.sqrt(tid.size)
