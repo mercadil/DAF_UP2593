@@ -1175,10 +1175,10 @@ def xas_ds_to_dict(ds):
     for k in keys:
         small_ds = xr.Dataset()
         for d in ds:
-            if k in d:
+            if k == d.split('_', 1)[0]:
                 small_ds[d.split('_', 1)[1]] = ds[d]
         for at in ds.attrs:
-            if k in at:
+            if k == at.split('_', 1)[0]:
                 small_ds.attrs[at.split('_', 1)[1]] = ds.attrs[at]
         xas_dict[k] = small_ds
     return xas_dict
