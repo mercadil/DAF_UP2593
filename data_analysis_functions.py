@@ -243,6 +243,12 @@ def remove_sample_baseline(mdata, method='BaselineRemoval',
                                                              ds['spectrum'].sel(trainId=tid).mean(dim='trainId'),
                                                              deg=degree,
                                                              signalRange=signalRange)
+                ds['spectrum_nobl'] = removePolyBaseline(ds.x,
+                                                         ds['spectrum'],
+                                                         deg=degree,
+                                                         signalRange=signalRange)
+            else:
+                raise ValueError('method not recognized.')
             
             ds['spectrum_std'] = ds.spectrum.sel(trainId=tid).std(dim='trainId')
             ds['spectrum_stderr'] = ds.spectrum_std / np.sqrt(tid.size)
@@ -316,7 +322,11 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
     other_fields = [f for f in fields if f not in ['newton', 'XTD10_SA3', 'SCS_SA3']]
     da = []
     for f in other_fields:
-        da.append(tb.get_array(run, f))
+        try:
+            da.append(tb.get_array(run, f))
+        except Exception as e:
+            print(e)
+
     xgm = tb.get_xgm(run, 'XTD10_SA3')
     newton = run.get_array(*tb.mnemonics_for_run(run)['newton'].values(),
                            name='newton', roi=ed.by_index[roi[2]:roi[3], roi[0]:roi[1]],
@@ -324,6 +334,8 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
     newton = newton.assign_coords({'trainId': newton.trainId + tid_shift,
                                    'x': np.arange(roi[0], roi[1], dtype=int)})
     ds = xr.merge(da + [newton, xgm.XTD10_SA3], join='inner')
+    energy = calibrate_viking(ds.x, runNB)
+    ds = ds.assign_coords({'x': energy})
     if use_scs_xgm:
         xgm_scs = tb.get_xgm(run, 'SCS_SA3')
         if xgm_scs.trainId.size > 0:
@@ -336,9 +348,10 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
         ds['dark'] = dark.mean(dim='trainId')
         newton_nobg = ds['newton'] - ds['dark']
         ds['spectrum'] = newton_nobg.sum(dim='y')
+        ds['profile'] = newton_nobg.sel(x=slice(signalRange[0], signalRange[1])).sum(dim='x')
     else:
-        ds['spectrum'] = ds['newton'].sum(dim='y')
-            
+        ds['spectrum'] = ds['newton'].astype(float).sum(dim='y')
+        ds['profile'] = ds['newton'].sel(x=slice(signalRange[0], signalRange[1])).sum(dim='x')
     ds = ds.sortby(ds.trainId)
     ds['trainId'] = ds.trainId.astype(int)
     ds.attrs['darkNB'] = darkNB
@@ -348,8 +361,6 @@ def load_from_dataCollection(run, runNB, fields, darkRun=None, darkNB=None,
     if 'SAM-Z-MOT' in ds:
         ds.attrs['sample_z'] = ds['SAM-Z-MOT'].mean().values
         ds = ds.drop('SAM-Z-MOT')
-    energy = calibrate_viking(ds.x, runNB)
-    ds = ds.assign_coords({'x': energy})
     
     ds['spectrum_nobl'] = removePolyBaseline(ds.x, ds.spectrum, 
                                              signalRange=signalRange)
@@ -955,7 +966,7 @@ def compute_XAS(mdata, thickness, sortby=None, beamlineTr=0.364):
         ds['absorptionCoef'] = np.log(ds['absorption']) / thickness
         ds['absorptionCoef_std'] = ds['absorption_std'] / (thickness * np.abs(ds['absorption']))
         ds['absorptionCoef_stderr'] = ds['absorption_stderr'] / (thickness * np.abs(ds['absorption']))
-
+        
         for at in mdata[r]['ref'].attrs:
             ds.attrs[at] = mdata[r]['ref'].attrs[at]
         ds.attrs['refNB'] = ds.attrs.pop('runNB')
@@ -1168,10 +1179,49 @@ def xas_ds_to_dict(ds):
     for k in keys:
         small_ds = xr.Dataset()
         for d in ds:
-            if k in d:
+            if k == d.split('_', 1)[0]:
                 small_ds[d.split('_', 1)[1]] = ds[d]
         for at in ds.attrs:
-            if k in at:
+            if k == at.split('_', 1)[0]:
                 small_ds.attrs[at.split('_', 1)[1]] = ds.attrs[at]
         xas_dict[k] = small_ds
     return xas_dict
+
+################################################################################
+########################## Save and load spectra ###############################
+################################################################################
+
+def save_spectra(filename, mdata, sortby=None):
+    if sortby=='Tr':
+        keys = [mdata[k]['ref'].attrs['Tr'] for k in mdata.keys()]
+        idx = np.argsort(keys) 
+        ordered = np.array([k for k in mdata.keys()])[idx]
+    else:
+        ordered = [k for k in mdata.keys()]
+    l = []
+    for r in ordered:
+        ref_spectra = mdata[r]['ref']['spectrum_nobl']
+        ref_scaling = mdata[r]['ref']['scalingFactor']
+        ref_spectra *= ref_scaling
+        ref_spectra = ref_spectra.rename(f'ref_spectra_{r}')
+        ref_spectra = ref_spectra.assign_coords({'trainId': np.arange(ref_spectra.sizes['trainId'])})
+        
+        sample_spectra = mdata[r]['sample']['spectrum_nobl'].where(mdata[r]['sample']['valid_tid'],
+                                                                    drop=True)
+        sample_scaling = mdata[r]['sample']['scalingFactor']
+        sample_spectra *= sample_scaling
+        sample_spectra = sample_spectra.rename(f'sample_spectra_{r}')
+        sample_spectra = sample_spectra.assign_coords({'trainId': np.arange(sample_spectra.sizes['trainId'])})
+
+        print(ref_spectra.max().values, sample_spectra.max().values)
+        l.append(ref_spectra)
+        l.append(sample_spectra)
+    ds = xr.merge(l)
+    ds.to_netcdf(filename)
+    print('saved spectra into ' + filename)
+    return
+    
+def load_spectra(filename):
+    print('loading spectra from ' + filename)
+    ds = xr.open_dataset(filename)
+    return ds

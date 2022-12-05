@@ -319,7 +319,7 @@ allRuns = {
     323: [318, 0.01, "ref", "NoFilter", 1, 1],
     324: [318, 0.01, "Cu1", "NoFilter", 1, 1],
     
-    #Cu1, deed 929, pump 945, pump blocked on camera
+    #Cu1, seed 929, pump 945, pump blocked on camera
     325: [326, 0.01, "ref", "NoFilter", 2, 1],
     327: [326, 0.01, "Cu1", "NoFilter", 2, 1],
     328: [330, 0.05, "ref", "NoFilter", 2, 1],
@@ -758,7 +758,10 @@ allRuns = {
     899: [896, 0.05, "ref", "NoFilter"],    
     900: [896, 0.05, "ref", "NoFilter"],    
     901: [896, 0.05, "ref", "NoFilter"],    
-    902: [896, 0.05, "ref", "NoFilter"],    
+    902: [896, 0.05, "ref", "NoFilter"],
+
+    945: [944, 0.0001, "ref", "NoFilter"],
+    946: [944, 0.0001, "Cu0.5", "NoFilter"],
 
     1111: [1106, 0.05, "ref", "NoFilter"],
     1112: [1113, 0.05, "ref", "NoFilter"],
